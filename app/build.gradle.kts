@@ -33,6 +33,9 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        // GeckoView drags in AndroidX / Kotlin libs built with a newer Kotlin than our
+        // compiler. Let the compiler read their (compatible) metadata anyway.
+        freeCompilerArgs += listOf("-Xskip-metadata-version-check")
     }
     buildFeatures {
         compose = true
