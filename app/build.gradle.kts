@@ -44,6 +44,14 @@ android {
     }
 }
 
+// GeckoView's transitive AndroidX libraries declare a newer compileSdk / AGP than this
+// project uses. They are runtime-only dependencies here, so skip the AAR metadata check.
+tasks.configureEach {
+    if (name.endsWith("AarMetadata")) {
+        enabled = false
+    }
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.ui:ui")
