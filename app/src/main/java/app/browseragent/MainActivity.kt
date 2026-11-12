@@ -27,8 +27,8 @@ class MainActivity : ComponentActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    if (browser.webView.canGoBack()) {
-                        browser.webView.goBack()
+                    if (browser.canGoBack()) {
+                        browser.back()
                     } else {
                         isEnabled = false
                         onBackPressedDispatcher.onBackPressed()
@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        browser.webView.destroy()
+        browser.destroy()
         super.onDestroy()
     }
 }
