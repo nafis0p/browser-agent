@@ -7,14 +7,19 @@ plugins {
 
 android {
     namespace = "app.browseragent"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "app.browseragent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0-gecko"
+
+        // GeckoView's omni AAR bundles every ABI; keep only 64-bit ARM to limit APK size.
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -32,6 +37,11 @@ android {
     buildFeatures {
         compose = true
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {
@@ -46,4 +56,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // Firefox's engine (release channel, all ABIs). "+" = newest release; pin it once it builds.
+    implementation("org.mozilla.geckoview:geckoview-omni:+")
 }
