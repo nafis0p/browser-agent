@@ -13,11 +13,13 @@ android {
         applicationId = "app.browseragent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0-gecko"
+        versionCode = 3
+        versionName = "0.2.1-gecko"
 
-        // GeckoView's omni AAR bundles every ABI; ship only arm64 (all modern phones).
+        // GeckoView's omni AAR bundles every ABI; keep the two ARM ones
+        // (32-bit phones need armeabi-v7a, modern phones use arm64-v8a).
         ndk {
+            abiFilters.add("armeabi-v7a")
             abiFilters.add("arm64-v8a")
         }
     }
