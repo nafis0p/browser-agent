@@ -1,5 +1,3 @@
-// Runs in every frame (including cross-origin iframes). Talks to the Android app over a
-// native-messaging port: the app sends {rid, op, id, arg, prefix}; we reply {type:'reply', rid, data}.
 (function () {
   if (window.__agentBridge) return;
   window.__agentBridge = true;
@@ -14,6 +12,7 @@
     return t.length > max ? t.slice(0, max) + '...' : t;
   }
 
+  // Content scripts can see closed shadow roots in Firefox.
   function shadowOf(el) {
     return el.openOrClosedShadowRoot || el.shadowRoot || null;
   }
@@ -49,20 +48,7 @@
     }
   }
 
-  function find(id, root) {
-    var el = root.querySelector('[data-agent-id=' + id + ']');
-    if (el) return el;
-    var all = root.querySelectorAll('*');
-    for (var i = 0; i < all.length; i++) {
-      var sr = shadowOf(all[i]);
-      if (sr) {
-        var f = find(id, sr);
-        if (f) return f;
-      }
-    }
-    return null;
-  }
-
+  // prefix is '' for the top frame and 'f1', 'f2', ... for sub-frames, so ids are unique.
   function snapshot(prefix) {
     var acc = [];
     collect(document, acc);
@@ -95,7 +81,7 @@
       if (el.disabled) item.disabled = true;
       if (isTop) {
         var rect = el.getBoundingClientRect();
-        if (rect.bottom < 0 || rect.top > window.innerHeight) item.off = true;
+        if (rect.bottom < 0 || rect.top > (window.innerHeight || 0)) item.off = true;
       }
       items.push(item);
     }
@@ -110,9 +96,21 @@
     return out;
   }
 
-  function res(ok, msg) {
-    return { ok: ok, msg: msg };
+  function find(id, root) {
+    var el = root.querySelector('[data-agent-id=' + id + ']');
+    if (el) return el;
+    var all = root.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var sr = shadowOf(all[i]);
+      if (sr) {
+        var f = find(id, sr);
+        if (f) return f;
+      }
+    }
+    return null;
   }
+
+  function res(ok, msg) { return { ok: ok, msg: msg }; }
 
   function act(op, id, arg) {
     if (op === 'scroll') {
@@ -129,12 +127,12 @@
     var tag = el.tagName;
 
     if (op === 'click') {
-      // Keep navigation in this single tab.
       var a = el.closest ? el.closest('a') : null;
       if (a && a.target === '_blank') a.target = '_self';
       el.click();
       return res(true, 'clicked ' + id);
     }
+
     if (op === 'fill') {
       el.focus();
       if (tag === 'INPUT' || tag === 'TEXTAREA') {
@@ -149,6 +147,7 @@
       }
       return res(true, 'filled ' + id);
     }
+
     if (op === 'select') {
       if (tag !== 'SELECT') return res(false, id + ' is not a select');
       var want = String(arg).toLowerCase();
@@ -168,6 +167,7 @@
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return res(true, 'selected ' + el.options[idx].text);
     }
+
     if (op === 'enter') {
       var init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
       el.focus();
@@ -179,6 +179,7 @@
       }
       return res(true, 'pressed Enter on ' + id);
     }
+
     return res(false, 'unknown op ' + op);
   }
 
@@ -193,4 +194,11 @@
   });
 
   port.postMessage({ type: 'hello', top: isTop, url: location.href });
+
+  // Links that would open a new window load in the same tab instead.
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a[target=_blank]') : null;
+    if (a) a.target = '_self';
+  }, true);
 })();

@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "Browser Agent Bridge",
   "version": "1.0",
-  "description": "Lets the Browser Agent app read and operate web pages.",
+  "description": "Lets the Browser Agent app read pages and perform actions in them.",
   "browser_specific_settings": {
     "gecko": {
       "id": "agent@browseragent.app"
@@ -17,9 +17,5 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": [
-    "nativeMessaging",
-    "nativeMessagingFromContent",
-    "geckoViewAddons"
-  ]
+  "permissions": ["nativeMessaging", "nativeMessagingFromContent", "geckoViewAddons"]
 }
