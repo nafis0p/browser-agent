@@ -16,7 +16,7 @@ android {
         versionCode = 2
         versionName = "0.2.0-gecko"
 
-        // GeckoView's omni AAR bundles every ABI; keep only 64-bit ARM to limit APK size.
+        // GeckoView's omni AAR bundles every ABI; ship only arm64 (all modern phones).
         ndk {
             abiFilters.add("arm64-v8a")
         }
@@ -57,6 +57,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
-    // Firefox's engine (release channel, all ABIs). "+" = newest release; pin it once it builds.
+    // Firefox engine. Dynamic version = latest release; pin it once a build works.
     implementation("org.mozilla.geckoview:geckoview-omni:+")
 }
