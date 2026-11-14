@@ -6,6 +6,7 @@
   var MAX = 200;
   var isTop = window === window.top;
   var port = browser.runtime.connectNative('browser');
+  var acting = false; // true while the agent itself is acting (its events are not "user" events)
 
   function clean(t, max) {
     t = String(t == null ? '' : t).replace(/\s+/g, ' ').trim();
@@ -186,7 +187,16 @@
   port.onMessage.addListener(function (msg) {
     var data;
     try {
-      data = msg.op === 'snapshot' ? snapshot(msg.prefix || '') : act(msg.op, msg.id, msg.arg);
+      if (msg.op === 'snapshot') {
+        data = snapshot(msg.prefix || '');
+      } else {
+        acting = true;
+        try {
+          data = act(msg.op, msg.id, msg.arg);
+        } finally {
+          acting = false;
+        }
+      }
     } catch (e) {
       data = { ok: false, msg: String(e && e.message ? e.message : e) };
     }
@@ -194,6 +204,44 @@
   });
 
   port.postMessage({ type: 'hello', top: isTop, url: location.href });
+
+  // ---- Report what the USER does by hand, so the agent never works from a stale picture.
+  var lastKey = '';
+  var lastAt = 0;
+
+  function describe(el) {
+    var t = el;
+    if (el && el.closest) {
+      t = el.closest('a,button,input,select,textarea,summary,label,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem]') || el;
+    }
+    return clean(labelOf(t) || t.innerText || t.value || t.tagName, 60);
+  }
+
+  function report(kind, el, value) {
+    if (acting || !el || el.nodeType !== 1) return;
+    var label = describe(el);
+    var key = kind + '|' + label + '|' + value;
+    var now = Date.now();
+    if (key === lastKey && now - lastAt < 800) return;
+    lastKey = key;
+    lastAt = now;
+    port.postMessage({ type: 'user', kind: kind, label: label, value: value || '', url: location.href });
+  }
+
+  // Only real user events are trusted; events created by scripts are not.
+  document.addEventListener('click', function (e) {
+    if (e.isTrusted) report('click', e.target, '');
+  }, true);
+  document.addEventListener('change', function (e) {
+    if (!e.isTrusted) return;
+    var el = e.target;
+    var type = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+    if (type === 'password') report('typed', el, '');
+    else report('changed', el, clean(el.value, 60));
+  }, true);
+  document.addEventListener('submit', function (e) {
+    if (e.isTrusted) report('submit', e.target, '');
+  }, true);
 
   // Links that would open a new window load in the same tab instead.
   document.addEventListener('click', function (e) {

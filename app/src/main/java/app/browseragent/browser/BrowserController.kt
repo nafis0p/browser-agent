@@ -22,6 +22,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
 import java.net.URLEncoder
@@ -42,14 +43,30 @@ class BrowserController(context: Context) {
     val webView: GeckoView = GeckoView(context)
     var url by mutableStateOf("about:blank")
 
+    // Observable state for the browser UI.
+    var progress by mutableStateOf(0)
+        private set
+    var isLoading by mutableStateOf(false)
+        private set
+    var canBack by mutableStateOf(false)
+        private set
+    var canForward by mutableStateOf(false)
+        private set
+    var desktopMode by mutableStateOf(false)
+        private set
+
     private val session = GeckoSession()
     private val json = Json { ignoreUnknownKeys = true }
 
     @Volatile
     private var loading = false
-    private var canGoBackState = false
     private var extensionReady = false
     private var pendingUrl: String? = null
+
+    // What the user did by hand (not the agent), so the agent is never working blind.
+    private val userEvents = ArrayList<String>()
+    private var agentActive = false
+    private var quietUntil = 0L
 
     /** One content-script connection (the top page or an iframe). */
     private class Frame(val port: WebExtension.Port) {
@@ -78,6 +95,17 @@ class BrowserController(context: Context) {
                 "reply" -> {
                     replies[m.optInt("rid")]?.complete(m.optJSONObject("data") ?: JSONObject())
                 }
+                "user" -> {
+                    val label = m.optString("label")
+                    val text = when (m.optString("kind")) {
+                        "click" -> "clicked '" + label + "'"
+                        "changed" -> "changed '" + label + "' to '" + m.optString("value") + "'"
+                        "typed" -> "typed in '" + label + "' (hidden)"
+                        "submit" -> "submitted a form ('" + label + "')"
+                        else -> m.optString("kind") + " '" + label + "'"
+                    }
+                    noteUser(text)
+                }
             }
         }
 
@@ -101,18 +129,31 @@ class BrowserController(context: Context) {
             object : GeckoSession.ProgressDelegate {
                 override fun onPageStart(session: GeckoSession, url: String) {
                     loading = true
+                    isLoading = true
+                    progress = 0
                     this@BrowserController.url = url
+                    noteUser("opened " + url.take(100))
                 }
 
                 override fun onPageStop(session: GeckoSession, success: Boolean) {
                     loading = false
+                    isLoading = false
+                    progress = 100
+                }
+
+                override fun onProgressChange(session: GeckoSession, value: Int) {
+                    progress = value
                 }
             },
         )
         session.setNavigationDelegate(
             object : GeckoSession.NavigationDelegate {
                 override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-                    canGoBackState = canGoBack
+                    canBack = canGoBack
+                }
+
+                override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+                    canForward = canGoForward
                 }
             },
         )
@@ -146,6 +187,35 @@ class BrowserController(context: Context) {
         if (u != null) session.loadUri(u)
     }
 
+    // ---------------------------------------------------------------- user activity
+
+    private fun noteUser(text: String) {
+        if (agentActive || System.currentTimeMillis() < quietUntil) return
+        if (userEvents.lastOrNull() == text) return
+        if (userEvents.size >= 40) userEvents.removeAt(0)
+        userEvents.add(text)
+    }
+
+    /** Things the user did by hand since the last call (cleared when read). */
+    fun drainUserEvents(): List<String> {
+        val out = ArrayList(userEvents)
+        userEvents.clear()
+        return out
+    }
+
+    /** Runs an agent action; browser events caused by it are not reported as user activity. */
+    private suspend fun <T> asAgent(block: suspend () -> T): T {
+        agentActive = true
+        try {
+            return block()
+        } finally {
+            agentActive = false
+            quietUntil = System.currentTimeMillis() + 1500
+        }
+    }
+
+    // ---------------------------------------------------------------- navigation
+
     fun normalize(raw: String): String {
         val t = raw.trim()
         if (t.isEmpty()) return "about:blank"
@@ -161,10 +231,35 @@ class BrowserController(context: Context) {
         if (extensionReady) session.loadUri(target) else pendingUrl = target
     }
 
-    fun canGoBack(): Boolean = canGoBackState
+    fun canGoBack(): Boolean = canBack
 
     fun back() {
         session.goBack()
+    }
+
+    fun forward() {
+        session.goForward()
+    }
+
+    fun reload() {
+        session.reload()
+    }
+
+    fun stopLoading() {
+        session.stop()
+    }
+
+    /** Switch between the mobile and the desktop version of sites, then reload. */
+    fun setDesktop(enabled: Boolean) {
+        desktopMode = enabled
+        val s = session.settings
+        s.setUserAgentMode(
+            if (enabled) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE,
+        )
+        s.setViewportMode(
+            if (enabled) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE,
+        )
+        session.reload()
     }
 
     fun destroy() {
@@ -173,24 +268,24 @@ class BrowserController(context: Context) {
 
     // ---------------------------------------------------------------- agent API
 
-    suspend fun navigate(raw: String): String {
+    suspend fun navigate(raw: String): String = asAgent {
         withContext(Dispatchers.Main) { load(raw) }
         settle()
-        return snapshot()
+        snapshot()
     }
 
-    suspend fun goBack(): String {
+    suspend fun goBack(): String = asAgent {
         val ok = withContext(Dispatchers.Main) {
-            if (canGoBackState) {
+            if (canBack) {
                 session.goBack()
                 true
             } else {
                 false
             }
         }
-        if (!ok) return "Cannot go back: no history."
+        if (!ok) return@asAgent "Cannot go back: no history."
         settle()
-        return snapshot()
+        snapshot()
     }
 
     /** Text snapshot of the top page plus up to 6 iframes. */
@@ -224,20 +319,20 @@ class BrowserController(context: Context) {
     }
 
     /** op: click | fill | select | enter | scroll. Returns the result plus a fresh snapshot. */
-    suspend fun act(op: String, id: String, arg: String): String {
+    suspend fun act(op: String, id: String, arg: String): String = asAgent {
         val frame: Frame? = if (op != "scroll" && id.startsWith("f")) {
             val n = id.drop(1).takeWhile { it.isDigit() }.toIntOrNull()
             if (n == null) null else subFrames.getOrNull(n - 1)
         } else {
             topFrame()
         }
-        if (frame == null) return "ERROR: that element's frame is gone. Call snapshot and use fresh ids."
+        if (frame == null) return@asAgent "ERROR: that element's frame is gone. Call snapshot and use fresh ids."
 
         val res = ask(frame, JSONObject().put("op", op).put("id", id).put("arg", arg), 8000)
-            ?: return "ERROR: the page did not respond.\n\n" + snapshot()
-        if (!res.optBoolean("ok")) return "ERROR: " + res.optString("msg") + "\n\n" + snapshot()
+            ?: return@asAgent "ERROR: the page did not respond.\n\n" + snapshot()
+        if (!res.optBoolean("ok")) return@asAgent "ERROR: " + res.optString("msg") + "\n\n" + snapshot()
         settle()
-        return "OK: " + res.optString("msg") + "\n\n" + snapshot()
+        "OK: " + res.optString("msg") + "\n\n" + snapshot()
     }
 
     // ---------------------------------------------------------------- internals
