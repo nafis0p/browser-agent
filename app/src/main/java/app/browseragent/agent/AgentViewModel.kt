@@ -8,8 +8,13 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.browseragent.browser.BrowserController
+import app.browseragent.data.Chat
+import app.browseragent.data.ChatEntry
+import app.browseragent.data.ChatStore
+import app.browseragent.data.HistoryStore
 import app.browseragent.data.ModelAlias
 import app.browseragent.data.Provider
+import app.browseragent.data.Shortcut
 import app.browseragent.data.Store
 import app.browseragent.llm.LlmRouter
 import app.browseragent.mcp.McpHub
@@ -18,10 +23,14 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
     val store = Store(app)
+    val history = HistoryStore(app)
+    val chats = ChatStore(app)
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
@@ -33,6 +42,11 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
     private var agent: Agent? = null
     private var job: Job? = null
     private var pending: CompletableDeferred<Boolean>? = null
+
+    // The chat that is currently open (saved automatically).
+    private var chatId = UUID.randomUUID().toString()
+    private var chatCreated = System.currentTimeMillis()
+    private var pendingContext: String? = null
 
     val entries = mutableStateListOf<LogEntry>()
 
@@ -51,9 +65,24 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
     var mcpStatus by mutableStateOf("")
         private set
 
+    // Appearance and browser settings (observable so the UI updates at once).
+    var themeMode by mutableStateOf(store.themeMode)
+        private set
+
+    var accent by mutableStateOf(store.accent)
+        private set
+
+    var searchEngine by mutableStateOf(store.searchEngine)
+        private set
+
+    var shortcuts by mutableStateOf(store.shortcuts)
+        private set
+
     fun attach(b: BrowserController) {
         if (browser !== b) {
             browser = b
+            b.searchTemplate = store.searchTemplate()
+            b.onPageLoaded = { url, title -> history.record(url, title) }
             agent = Agent(router, b, hub, store, this)
         }
     }
@@ -75,14 +104,50 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         pending?.complete(ok)
     }
 
+    // ---------------------------------------------------------------- chats
+
+    private fun persistChat() {
+        val first = entries.firstOrNull { it.kind == Kind.USER } ?: return
+        chats.upsert(
+            Chat(
+                id = chatId,
+                title = first.text.trim().take(48),
+                created = chatCreated,
+                updated = System.currentTimeMillis(),
+                entries = entries.takeLast(400).map { ChatEntry(it.kind.name, it.text) },
+            ),
+        )
+    }
+
+    /** A short transcript so a reopened chat continues with some memory of what was said. */
+    private fun transcript(c: Chat): String =
+        c.entries
+            .filter { it.kind == Kind.USER.name || it.kind == Kind.ASSISTANT.name }
+            .takeLast(12)
+            .joinToString("\n") {
+                (if (it.kind == Kind.USER.name) "User: " else "Assistant: ") + it.text.take(500)
+            }
+
+    private fun startFreshChat() {
+        agent?.reset()
+        entries.clear()
+        chatId = UUID.randomUUID().toString()
+        chatCreated = System.currentTimeMillis()
+        pendingContext = null
+    }
+
     fun send(goal: String) {
         val a = agent ?: return
         if (running) return
         running = true
         entries.add(LogEntry(Kind.USER, goal))
+        persistChat()
+        val ctx = pendingContext
+        pendingContext = null
+        val full = if (ctx == null) goal else "[Earlier in this conversation]\n" + ctx + "\n\n[New message]\n" + goal
         job = viewModelScope.launch {
             try {
-                a.run(goal)
+                a.run(full)
             } catch (e: CancellationException) {
                 entries.add(LogEntry(Kind.INFO, "Stopped."))
                 throw e
@@ -92,6 +157,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
                 running = false
                 pending?.complete(false)
                 pendingConfirm = null
+                persistChat()
             }
         }
     }
@@ -102,9 +168,33 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
 
     fun newChat() {
         stop()
-        agent?.reset()
-        entries.clear()
+        persistChat()
+        startFreshChat()
     }
+
+    fun openChat(c: Chat) {
+        stop()
+        persistChat()
+        entries.clear()
+        for (e in c.entries) {
+            val k = runCatching { Kind.valueOf(e.kind) }.getOrNull() ?: continue
+            entries.add(LogEntry(k, e.text))
+        }
+        chatId = c.id
+        chatCreated = c.created
+        agent?.reset()
+        pendingContext = transcript(c)
+    }
+
+    fun deleteChat(id: String) {
+        chats.delete(id)
+        if (id == chatId) {
+            stop()
+            startFreshChat()
+        }
+    }
+
+    // ---------------------------------------------------------------- settings
 
     fun setActive(name: String?) {
         activeAlias = name
@@ -116,6 +206,28 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         store.aliases = newAliases
         aliases = newAliases
         if (newAliases.none { it.name == activeAlias }) setActive(newAliases.firstOrNull()?.name)
+    }
+
+    fun setTheme(mode: String) {
+        themeMode = mode
+        store.themeMode = mode
+    }
+
+    fun setAccent(key: String) {
+        accent = key
+        store.accent = key
+    }
+
+    fun setSearch(key: String, customUrl: String) {
+        searchEngine = key
+        store.searchEngine = key
+        store.customSearchUrl = customUrl
+        browser?.searchTemplate = store.searchTemplate()
+    }
+
+    fun saveShortcuts(list: List<Shortcut>) {
+        shortcuts = list
+        store.shortcuts = list
     }
 
     fun testMcp() {

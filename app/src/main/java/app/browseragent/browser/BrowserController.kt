@@ -55,6 +55,16 @@ class BrowserController(context: Context) {
     var desktopMode by mutableStateOf(false)
         private set
 
+    /** True while the built-in start page is shown instead of a web page. */
+    var isHome by mutableStateOf(true)
+        private set
+
+    /** Search URL template; %s is replaced by the search text. */
+    var searchTemplate: String = "https://duckduckgo.com/?q=%s"
+
+    /** Called with (url, title) when a page has loaded (for the browsing history). */
+    var onPageLoaded: ((String, String) -> Unit)? = null
+
     private val session = GeckoSession()
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -94,6 +104,9 @@ class BrowserController(context: Context) {
                 }
                 "reply" -> {
                     replies[m.optInt("rid")]?.complete(m.optJSONObject("data") ?: JSONObject())
+                }
+                "page" -> {
+                    onPageLoaded?.invoke(m.optString("url"), m.optString("title"))
                 }
                 "user" -> {
                     val label = m.optString("label")
@@ -222,19 +235,29 @@ class BrowserController(context: Context) {
         if (Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://.*").matches(t)) return t
         if (t.startsWith("about:")) return t
         if (!t.contains(' ') && t.contains('.')) return "https://" + t
-        return "https://duckduckgo.com/?q=" + URLEncoder.encode(t, "UTF-8")
+        return searchTemplate.replace("%s", URLEncoder.encode(t, "UTF-8"))
     }
 
-    /** Main thread only. */
+    /** Main thread only. Opens the address, or searches for the text. */
     fun load(raw: String) {
+        isHome = false
         val target = normalize(raw)
         if (extensionReady) session.loadUri(target) else pendingUrl = target
     }
 
-    fun canGoBack(): Boolean = canBack
+    /** Shows the start page (the open page stays loaded underneath). */
+    fun showHome() {
+        isHome = true
+    }
+
+    fun canGoBack(): Boolean = canBack || (isHome && url != "about:blank")
 
     fun back() {
-        session.goBack()
+        if (isHome && url != "about:blank") {
+            isHome = false
+        } else {
+            session.goBack()
+        }
     }
 
     fun forward() {
@@ -290,6 +313,11 @@ class BrowserController(context: Context) {
 
     /** Text snapshot of the top page plus up to 6 iframes. */
     suspend fun snapshot(): String {
+        if (isHome) {
+            return "URL: about:home\nTitle: Start page\n<page_text untrusted>\n" +
+                "The browser start page is showing; no web page is open. Use navigate to open a site.\n" +
+                "</page_text>\nInteractive elements (use these ids):\n"
+        }
         val top = topFrame()
             ?: return "ERROR: the page is not ready (browser bridge not connected yet). Wait a moment and call snapshot again."
         val data = ask(top, JSONObject().put("op", "snapshot").put("prefix", ""), 8000)
@@ -320,6 +348,7 @@ class BrowserController(context: Context) {
 
     /** op: click | fill | select | enter | scroll. Returns the result plus a fresh snapshot. */
     suspend fun act(op: String, id: String, arg: String): String = asAgent {
+        if (isHome) return@asAgent "ERROR: the start page is showing; open a site with navigate first."
         val frame: Frame? = if (op != "scroll" && id.startsWith("f")) {
             val n = id.drop(1).takeWhile { it.isDigit() }.toIntOrNull()
             if (n == null) null else subFrames.getOrNull(n - 1)

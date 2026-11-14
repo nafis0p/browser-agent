@@ -215,6 +215,17 @@
 
   port.postMessage({ type: 'hello', top: isTop, url: location.href });
 
+  // ---- Tell the app which page is open (for the browsing history).
+  function sendPage() {
+    if (!isTop) return;
+    port.postMessage({ type: 'page', url: location.href, title: document.title });
+  }
+  document.addEventListener('DOMContentLoaded', sendPage);
+  window.addEventListener('load', function () {
+    sendPage();
+    setTimeout(sendPage, 1500);
+  });
+
   // ---- Report what the USER does by hand, so the agent never works from a stale picture.
   var lastKey = '';
   var lastAt = 0;
