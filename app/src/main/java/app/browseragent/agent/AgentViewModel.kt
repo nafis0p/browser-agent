@@ -66,6 +66,8 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         private set
 
     // Appearance and browser settings (observable so the UI updates at once).
+    // Note: the functions that change them are named choose*/save* on purpose; a function
+    // called setAccent() would clash with the generated setter of the property.
     var themeMode by mutableStateOf(store.themeMode)
         private set
 
@@ -208,17 +210,17 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         if (newAliases.none { it.name == activeAlias }) setActive(newAliases.firstOrNull()?.name)
     }
 
-    fun setTheme(mode: String) {
+    fun chooseTheme(mode: String) {
         themeMode = mode
         store.themeMode = mode
     }
 
-    fun setAccent(key: String) {
+    fun chooseAccent(key: String) {
         accent = key
         store.accent = key
     }
 
-    fun setSearch(key: String, customUrl: String) {
+    fun chooseSearch(key: String, customUrl: String) {
         searchEngine = key
         store.searchEngine = key
         store.customSearchUrl = customUrl
