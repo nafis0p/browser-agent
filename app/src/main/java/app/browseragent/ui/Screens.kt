@@ -32,8 +32,8 @@ import java.util.UUID
 @Composable
 fun AppRoot(vm: AgentViewModel, browser: BrowserController) {
     var screen by remember { mutableStateOf(0) }
-    val labels = listOf("Browser", "Providers", "MCP")
-    val icons = listOf("🌐", "🔑", "🔌")
+    val labels = listOf("Browser", "Providers", "MCP", "Settings")
+    val icons = listOf("\ud83c\udf10", "\ud83d\udd11", "\ud83d\udd0c", "\u2699\ufe0f")
 
     Scaffold(
         bottomBar = {
@@ -54,7 +54,11 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController) {
             BrowserScreen(vm, browser)
             if (screen != 0) {
                 Surface(Modifier.fillMaxSize().pointerInput(Unit) {}) {
-                    if (screen == 1) ProvidersScreen(vm) else McpScreen(vm)
+                    when (screen) {
+                        1 -> ProvidersScreen(vm)
+                        2 -> McpScreen(vm)
+                        else -> SettingsScreen(vm)
+                    }
                 }
             }
         }
