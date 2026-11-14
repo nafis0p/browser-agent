@@ -8,6 +8,16 @@
   var port = browser.runtime.connectNative('browser');
   var acting = false; // true while the agent itself is acting (its events are not "user" events)
 
+  // Fields that hold personal data: their values are never sent to the AI.
+  var SENS = new RegExp('pass|pwd|pin|otp|cvv|cvc|card|cc-|iban|account|ssn|social|e-?mail|phone|tel|mobile|address|street|zip|postal|billing|birth|dob|user|login|first-?name|last-?name|full-?name|surname', 'i');
+
+  function sensitive(el) {
+    var type = (el.getAttribute('type') || '').toLowerCase();
+    if (type === 'password' || type === 'email' || type === 'tel') return true;
+    var hay = [el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('placeholder'), el.getAttribute('aria-label')].join(' ');
+    return SENS.test(hay);
+  }
+
   function clean(t, max) {
     t = String(t == null ? '' : t).replace(/\s+/g, ' ').trim();
     return t.length > max ? t.slice(0, max) + '...' : t;
@@ -65,10 +75,10 @@
       var type = (el.getAttribute('type') || '').toLowerCase();
       var role = el.getAttribute('role') || (tag === 'input' ? 'input:' + (type || 'text') : tag);
       var item = { id: id, role: role, label: clean(labelOf(el) || el.innerText || el.value, 80) };
-      if (tag === 'input' && type === 'password') {
-        item.value = el.value ? '(set)' : '';
-      } else if (tag === 'input' || tag === 'textarea') {
-        if (type !== 'checkbox' && type !== 'radio' && type !== 'submit' && type !== 'button') item.value = clean(el.value, 80);
+      if (tag === 'input' || tag === 'textarea') {
+        if (type !== 'checkbox' && type !== 'radio' && type !== 'submit' && type !== 'button') {
+          item.value = sensitive(el) ? (el.value ? '(set)' : '') : clean(el.value, 80);
+        }
       }
       if (tag === 'input' && (type === 'checkbox' || type === 'radio')) item.checked = !!el.checked;
       else if (el.getAttribute('aria-checked')) item.checked = el.getAttribute('aria-checked') === 'true';
@@ -235,8 +245,8 @@
   document.addEventListener('change', function (e) {
     if (!e.isTrusted) return;
     var el = e.target;
-    var type = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
-    if (type === 'password') report('typed', el, '');
+    // Personal data typed by the user is never reported with its value.
+    if (el.getAttribute && sensitive(el)) report('changed', el, '(value hidden)');
     else report('changed', el, clean(el.value, 60));
   }, true);
   document.addEventListener('submit', function (e) {

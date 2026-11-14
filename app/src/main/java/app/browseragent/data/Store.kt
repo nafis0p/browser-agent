@@ -5,6 +5,8 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 /** Settings persisted in encrypted shared preferences (keys never stored in plain text). */
@@ -25,6 +27,7 @@ class Store(context: Context) {
     private val providerSer = ListSerializer(Provider.serializer())
     private val aliasSer = ListSerializer(ModelAlias.serializer())
     private val mcpSer = ListSerializer(McpServer.serializer())
+    private val vaultSer = MapSerializer(String.serializer(), String.serializer())
 
     var providers: List<Provider>
         get() = load("providers", providerSer) ?: defaultProviders()
@@ -37,6 +40,18 @@ class Store(context: Context) {
     var mcpServers: List<McpServer>
         get() = load("mcp", mcpSer) ?: emptyList()
         set(value) = save("mcp", mcpSer, value)
+
+    /** Private values (email, password, phone, card...) the AI can only use through placeholders. */
+    var vault: Map<String, String>
+        get() = load("vault", vaultSer) ?: emptyMap()
+        set(value) = save("vault", vaultSer, value)
+
+    /** Custom system prompt; null means: use the built-in default. */
+    var systemPrompt: String?
+        get() = prefs.getString("system_prompt", null)
+        set(value) {
+            prefs.edit().putString("system_prompt", value).apply()
+        }
 
     var activeAlias: String?
         get() = prefs.getString("active", null) ?: aliases.firstOrNull()?.name
