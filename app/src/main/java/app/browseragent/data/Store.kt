@@ -83,10 +83,67 @@ class Store(context: Context) {
             prefs.edit().putString("system_prompt", value).apply()
         }
 
+    /** Model used for the current run only (team roles). Never saved. */
+    var aliasOverride: String? = null
+
     var activeAlias: String?
-        get() = prefs.getString("active", null) ?: aliases.firstOrNull()?.name
+        get() = aliasOverride ?: prefs.getString("active", null) ?: aliases.firstOrNull()?.name
         set(value) {
             prefs.edit().putString("active", value).apply()
+        }
+
+    // ---------------------------------------------------------------- agent team
+
+    /** single, or team (planner + executor + checker). */
+    var teamMode: String
+        get() = prefs.getString("team_mode", "single") ?: "single"
+        set(value) {
+            prefs.edit().putString("team_mode", value).apply()
+        }
+
+    /** How many times the checker may send the executor back to fix problems. */
+    var maxFixRounds: Int
+        get() = prefs.getInt("fix_rounds", 1)
+        set(value) {
+            prefs.edit().putInt("fix_rounds", value).apply()
+        }
+
+    /** Model alias per role; empty means: the active model. */
+    var plannerAlias: String
+        get() = prefs.getString("planner_alias", "") ?: ""
+        set(value) {
+            prefs.edit().putString("planner_alias", value).apply()
+        }
+
+    var executorAlias: String
+        get() = prefs.getString("executor_alias", "") ?: ""
+        set(value) {
+            prefs.edit().putString("executor_alias", value).apply()
+        }
+
+    var checkerAlias: String
+        get() = prefs.getString("checker_alias", "") ?: ""
+        set(value) {
+            prefs.edit().putString("checker_alias", value).apply()
+        }
+
+    /** Role instructions; null means: the built-in default. */
+    var plannerPrompt: String?
+        get() = prefs.getString("planner_prompt", null)
+        set(value) {
+            prefs.edit().putString("planner_prompt", value).apply()
+        }
+
+    var executorPrompt: String?
+        get() = prefs.getString("executor_prompt", null)
+        set(value) {
+            prefs.edit().putString("executor_prompt", value).apply()
+        }
+
+    var checkerPrompt: String?
+        get() = prefs.getString("checker_prompt", null)
+        set(value) {
+            prefs.edit().putString("checker_prompt", value).apply()
         }
 
     // ---------------------------------------------------------------- browser settings

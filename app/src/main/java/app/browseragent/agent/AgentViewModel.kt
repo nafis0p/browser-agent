@@ -40,8 +40,12 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
 
     private var browser: BrowserController? = null
     private var agent: Agent? = null
+    private var orchestrator: Orchestrator? = null
     private var job: Job? = null
     private var pending: CompletableDeferred<Boolean>? = null
+
+    // The last thing the executor said (the team's checker reads it).
+    private var lastAssistant = ""
 
     // The chat that is currently open (saved automatically).
     private var chatId = UUID.randomUUID().toString()
@@ -86,10 +90,19 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
             b.searchTemplate = store.searchTemplate()
             b.onPageLoaded = { url, title -> history.record(url, title) }
             agent = Agent(router, b, hub, store, this)
+            orchestrator = Orchestrator(
+                router,
+                b,
+                store,
+                this,
+                { lastAssistant },
+                { lastAssistant = "" },
+            )
         }
     }
 
     override fun log(kind: Kind, text: String) {
+        if (kind == Kind.ASSISTANT) lastAssistant = text
         entries.add(LogEntry(kind, text))
     }
 
@@ -147,9 +160,10 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         val ctx = pendingContext
         pendingContext = null
         val full = if (ctx == null) goal else "[Earlier in this conversation]\n" + ctx + "\n\n[New message]\n" + goal
+        val team = orchestrator
         job = viewModelScope.launch {
             try {
-                a.run(full)
+                if (store.teamMode == "team" && team != null) team.run(a, full) else a.run(full)
             } catch (e: CancellationException) {
                 entries.add(LogEntry(Kind.INFO, "Stopped."))
                 throw e
@@ -159,6 +173,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
                 running = false
                 pending?.complete(false)
                 pendingConfirm = null
+                store.aliasOverride = null
                 persistChat()
             }
         }

@@ -26,7 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.browseragent.agent.AgentViewModel
 
-private enum class SPage { HUB, BROWSER, PROMPT, PROVIDERS, MCP }
+private enum class SPage { HUB, BROWSER, TEAM, PROMPT, PROVIDERS, MCP }
 
 /**
  * All settings pages live here. To add a page: add an SPage value, a title and a Hub row.
@@ -40,6 +40,7 @@ fun SettingsNav(vm: AgentViewModel, onExit: () -> Unit) {
     val title = when (page) {
         SPage.HUB -> "Settings"
         SPage.BROWSER -> "Browser & appearance"
+        SPage.TEAM -> "Agent team"
         SPage.PROMPT -> "AI instructions & personal data"
         SPage.PROVIDERS -> "Providers & models"
         SPage.MCP -> "MCP servers"
@@ -59,6 +60,7 @@ fun SettingsNav(vm: AgentViewModel, onExit: () -> Unit) {
             when (page) {
                 SPage.HUB -> Hub { page = it }
                 SPage.BROWSER -> BrowserSettingsScreen(vm)
+                SPage.TEAM -> TeamSettingsScreen(vm)
                 SPage.PROMPT -> SettingsScreen(vm)
                 SPage.PROVIDERS -> ProvidersScreen(vm)
                 SPage.MCP -> McpScreen(vm)
@@ -77,6 +79,10 @@ private fun Hub(go: (SPage) -> Unit) {
             "Browser & appearance",
             "Homepage, search engine, theme, accent colour, start-page shortcuts",
         ) { go(SPage.BROWSER) }
+        HubRow(
+            "Agent team",
+            "One agent, or a planner + executor + checker with their own models and instructions",
+        ) { go(SPage.TEAM) }
         HubRow(
             "AI instructions & personal data",
             "System prompt, and the placeholders for email, password, phone, card...",
