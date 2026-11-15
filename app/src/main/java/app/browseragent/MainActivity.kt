@@ -9,8 +9,10 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.graphics.Color
 import app.browseragent.agent.AgentViewModel
 import app.browseragent.browser.BrowserController
+import app.browseragent.data.ACCENTS
 import app.browseragent.ui.AppRoot
 
 class MainActivity : ComponentActivity() {
@@ -21,7 +23,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         browser = BrowserController(this)
         vm.attach(browser)
-        if (savedInstanceState == null) browser.load("https://duckduckgo.com")
+
+        // No homepage set: the built-in start page is shown. Otherwise open the homepage.
+        if (savedInstanceState == null) {
+            val homepage = vm.store.homepage
+            if (homepage.isNotBlank()) browser.load(homepage)
+        }
 
         onBackPressedDispatcher.addCallback(
             this,
@@ -38,7 +45,28 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            val scheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+            val dark = when (vm.themeMode) {
+                "light" -> false
+                "dark" -> true
+                else -> isSystemInDarkTheme()
+            }
+            val accent = ACCENTS.firstOrNull { it.key == vm.accent } ?: ACCENTS[0]
+            val primary = Color(accent.argb)
+            val scheme = if (dark) {
+                darkColorScheme(
+                    primary = primary,
+                    onPrimary = Color.White,
+                    primaryContainer = primary.copy(alpha = 0.30f),
+                    onPrimaryContainer = Color.White,
+                )
+            } else {
+                lightColorScheme(
+                    primary = primary,
+                    onPrimary = Color.White,
+                    primaryContainer = primary.copy(alpha = 0.18f),
+                    onPrimaryContainer = primary,
+                )
+            }
             MaterialTheme(colorScheme = scheme) { AppRoot(vm, browser) }
         }
     }

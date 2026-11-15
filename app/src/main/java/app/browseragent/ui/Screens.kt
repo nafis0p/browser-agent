@@ -1,197 +1,41 @@
 package app.browseragent.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import app.browseragent.agent.AgentViewModel
-import app.browseragent.agent.Kind
-import app.browseragent.browser.BrowserController
 import app.browseragent.data.McpServer
 import app.browseragent.data.ModelAlias
 import app.browseragent.data.Provider
 import app.browseragent.data.Route
 import java.util.UUID
-
-@Composable
-fun AppRoot(vm: AgentViewModel, browser: BrowserController) {
-    var screen by remember { mutableStateOf(0) }
-    val labels = listOf("Browser", "Providers", "MCP", "Settings")
-    val icons = listOf("\ud83c\udf10", "\ud83d\udd11", "\ud83d\udd0c", "\u2699\ufe0f")
-
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                labels.forEachIndexed { i, label ->
-                    NavigationBarItem(
-                        selected = screen == i,
-                        onClick = { screen = i },
-                        icon = { Text(icons[i]) },
-                        label = { Text(label) },
-                    )
-                }
-            }
-        },
-    ) { inner ->
-        Box(Modifier.padding(inner).fillMaxSize()) {
-            // The browser stays composed so the WebView keeps its state.
-            BrowserScreen(vm, browser)
-            if (screen != 0) {
-                Surface(Modifier.fillMaxSize().pointerInput(Unit) {}) {
-                    when (screen) {
-                        1 -> ProvidersScreen(vm)
-                        2 -> McpScreen(vm)
-                        else -> SettingsScreen(vm)
-                    }
-                }
-            }
-        }
-    }
-
-    val ask = vm.pendingConfirm
-    if (ask != null) {
-        AlertDialog(
-            onDismissRequest = { vm.answerConfirm(false) },
-            title = { Text("Confirm action") },
-            text = { Text(ask) },
-            confirmButton = { TextButton(onClick = { vm.answerConfirm(true) }) { Text("Allow") } },
-            dismissButton = { TextButton(onClick = { vm.answerConfirm(false) }) { Text("Deny") } },
-        )
-    }
-}
-
-@Composable
-private fun BrowserScreen(vm: AgentViewModel, browser: BrowserController) {
-    Column(Modifier.fillMaxSize()) {
-        UrlBar(browser)
-        AndroidView(
-            factory = { browser.webView },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
-        AgentPanel(vm)
-    }
-}
-
-@Composable
-private fun UrlBar(browser: BrowserController) {
-    var text by remember(browser.url) { mutableStateOf(browser.url) }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, keyboardType = KeyboardType.Uri),
-            keyboardActions = KeyboardActions(onGo = { browser.load(text) }),
-        )
-        TextButton(onClick = { browser.load(text) }) { Text("Go") }
-    }
-}
-
-@Composable
-private fun AgentPanel(vm: AgentViewModel) {
-    var input by remember { mutableStateOf("") }
-    var expanded by remember { mutableStateOf(true) }
-    var menuOpen by remember { mutableStateOf(false) }
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(vm.entries.size) {
-        if (vm.entries.isNotEmpty()) listState.animateScrollToItem(vm.entries.size - 1)
-    }
-
-    Column(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(8.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box {
-                TextButton(onClick = { menuOpen = true }) { Text(vm.activeAlias ?: "No model") }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    vm.aliases.forEach { a ->
-                        DropdownMenuItem(
-                            text = { Text(a.name) },
-                            onClick = {
-                                vm.setActive(a.name)
-                                menuOpen = false
-                            },
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = { vm.newChat() }) { Text("New chat") }
-            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide log" else "Show log") }
-        }
-
-        if (expanded) {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().height(180.dp)) {
-                items(vm.entries) { e ->
-                    val color = when (e.kind) {
-                        Kind.USER -> MaterialTheme.colorScheme.primary
-                        Kind.ASSISTANT -> MaterialTheme.colorScheme.onSurface
-                        Kind.TOOL -> MaterialTheme.colorScheme.onSurfaceVariant
-                        Kind.INFO -> MaterialTheme.colorScheme.tertiary
-                        Kind.ERROR -> MaterialTheme.colorScheme.error
-                    }
-                    val prefix = when (e.kind) {
-                        Kind.USER -> "You: "
-                        Kind.TOOL -> "> "
-                        Kind.INFO -> "- "
-                        Kind.ERROR -> "! "
-                        Kind.ASSISTANT -> ""
-                    }
-                    Text(
-                        prefix + e.text,
-                        color = color,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(vertical = 2.dp),
-                    )
-                }
-            }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Tell the agent what to do") },
-                maxLines = 3,
-            )
-            Spacer(Modifier.width(8.dp))
-            if (vm.running) {
-                Button(onClick = { vm.stop() }) { Text("Stop") }
-            } else {
-                Button(
-                    onClick = {
-                        if (input.isNotBlank()) {
-                            vm.send(input.trim())
-                            input = ""
-                        }
-                    },
-                ) { Text("Send") }
-            }
-        }
-    }
-}
 
 @Composable
 private fun Field(
@@ -213,7 +57,7 @@ private fun Field(
 private data class AliasEdit(val id: String, val name: String, val routes: String)
 
 @Composable
-private fun ProvidersScreen(vm: AgentViewModel) {
+internal fun ProvidersScreen(vm: AgentViewModel) {
     var providers by remember { mutableStateOf(vm.store.providers) }
     var aliasEdits by remember {
         mutableStateOf(
@@ -338,7 +182,7 @@ private fun ProvidersScreen(vm: AgentViewModel) {
 }
 
 @Composable
-private fun McpScreen(vm: AgentViewModel) {
+internal fun McpScreen(vm: AgentViewModel) {
     var servers by remember { mutableStateOf(vm.store.mcpServers) }
 
     Column(
