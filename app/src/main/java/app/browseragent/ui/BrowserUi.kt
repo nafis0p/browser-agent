@@ -78,20 +78,12 @@ import java.text.DateFormat
 import java.util.Calendar
 import java.util.Date
 
-private enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, PROMPT, PROVIDERS, MCP }
-
-private fun parentOf(p: Page): Page = when (p) {
-    Page.PROMPT, Page.PROVIDERS, Page.MCP -> Page.SETTINGS
-    else -> Page.BROWSER
-}
+private enum class Page { BROWSER, HISTORY, CHATS, SETTINGS }
 
 private fun titleOf(p: Page): String = when (p) {
     Page.HISTORY -> "History"
     Page.CHATS -> "AI chats"
     Page.SETTINGS -> "Settings"
-    Page.PROMPT -> "AI instructions & personal data"
-    Page.PROVIDERS -> "Providers & models"
-    Page.MCP -> "MCP servers"
     Page.BROWSER -> ""
 }
 
@@ -118,7 +110,7 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController) {
     var page by remember { mutableStateOf(Page.BROWSER) }
     var aiOpen by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = page != Page.BROWSER) { page = parentOf(page) }
+    BackHandler(enabled = page != Page.BROWSER) { page = Page.BROWSER }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // The browser stays composed so the Firefox view keeps its state.
@@ -132,20 +124,19 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController) {
         )
         if (page != Page.BROWSER) {
             Surface(Modifier.fillMaxSize().pointerInput(Unit) {}) {
-                Column(Modifier.fillMaxSize()) {
-                    SubBar(titleOf(page)) { page = parentOf(page) }
-                    Box(Modifier.weight(1f)) {
-                        when (page) {
-                            Page.HISTORY -> HistoryScreen(vm, browser) { page = Page.BROWSER }
-                            Page.CHATS -> ChatsScreen(vm) {
-                                page = Page.BROWSER
-                                aiOpen = true
+                when (page) {
+                    Page.SETTINGS -> SettingsNav(vm) { page = Page.BROWSER }
+                    else -> Column(Modifier.fillMaxSize()) {
+                        SubBar(titleOf(page)) { page = Page.BROWSER }
+                        Box(Modifier.weight(1f)) {
+                            when (page) {
+                                Page.HISTORY -> HistoryScreen(vm, browser) { page = Page.BROWSER }
+                                Page.CHATS -> ChatsScreen(vm) {
+                                    page = Page.BROWSER
+                                    aiOpen = true
+                                }
+                                else -> {}
                             }
-                            Page.SETTINGS -> SettingsHub { page = it }
-                            Page.PROMPT -> SettingsScreen(vm)
-                            Page.PROVIDERS -> ProvidersScreen(vm)
-                            Page.MCP -> McpScreen(vm)
-                            Page.BROWSER -> {}
                         }
                     }
                 }
@@ -761,43 +752,6 @@ private fun ChatsScreen(vm: AgentViewModel, onOpen: () -> Unit) {
                     TextButton(onClick = { vm.deleteChat(c.id) }) { Text("✕") }
                 }
             }
-        }
-    }
-}
-
-// ==================================================================== settings hub
-
-@Composable
-private fun SettingsHub(go: (Page) -> Unit) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        HubRow(
-            "AI instructions & personal data",
-            "System prompt, and the placeholders for email, password, phone, card...",
-        ) { go(Page.PROMPT) }
-        HubRow(
-            "Providers & models",
-            "API keys and fallback routes between providers",
-        ) { go(Page.PROVIDERS) }
-        HubRow(
-            "MCP servers",
-            "Extra tools for the AI",
-        ) { go(Page.MCP) }
-    }
-}
-
-@Composable
-private fun HubRow(title: String, sub: String, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Column(Modifier.padding(14.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(
-                sub,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
