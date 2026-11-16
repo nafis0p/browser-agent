@@ -3,33 +3,12 @@ package app.browseragent.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,16 +16,70 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.browseragent.agent.AgentViewModel
 import app.browseragent.data.ACCENTS
+import app.browseragent.data.AppPrefs
+import app.browseragent.data.CustomEngine
 import app.browseragent.data.SEARCH_ENGINES
 import app.browseragent.data.Shortcut
 import java.util.UUID
 
 private data class SRow(val id: String, val title: String, val url: String)
 
+/**
+ * Turns the address of a search results page into a search template (with %s).
+ * Example: https://example.com/search?q=test  ->  https://example.com/search?q=%s
+ * Returns null when the search word cannot be found.
+ */
+internal fun toSearchTemplate(raw: String): String? {
+    val url = raw.trim()
+    if (!url.startsWith("http")) return null
+    if (url.contains("%s")) return url
+
+    val q = url.substringAfter('?', "").substringBefore('#')
+    if (q.isNotEmpty()) {
+        val base = url.substringBefore('?')
+        val parts = q.split('&')
+        val known = listOf(
+            "q", "query", "search", "s", "k", "text", "term", "keyword", "keywords",
+            "wd", "p", "searchterm", "search_query", "field-keywords",
+        )
+        // 1) a well-known search parameter
+        for ((i, p) in parts.withIndex()) {
+            if (p.contains('=') && p.substringBefore('=').lowercase() in known) {
+                val np = parts.toMutableList()
+                np[i] = p.substringBefore('=') + "=%s"
+                return base + "?" + np.joinToString("&")
+            }
+        }
+        // 2) the parameter whose value is the word 'test'
+        for ((i, p) in parts.withIndex()) {
+            if (p.contains('=') && p.substringAfter('=').equals("test", ignoreCase = true)) {
+                val np = parts.toMutableList()
+                np[i] = p.substringBefore('=') + "=%s"
+                return base + "?" + np.joinToString("&")
+            }
+        }
+    }
+    // 3) the word 'test' somewhere in the path, e.g. https://example.com/search/test
+    val idx = url.lowercase().lastIndexOf("test")
+    if (idx > url.indexOf("://") + 3) {
+        return url.substring(0, idx) + "%s" + url.substring(idx + 4)
+    }
+    return null
+}
+
 @Composable
-private fun EngineRow(name: String, selected: Boolean, onClick: () -> Unit) {
+private fun Choice(selected: Boolean, label: String, onClick: () -> Unit) {
+    if (selected) {
+        Button(onClick = onClick) { Text(label) }
+    } else {
+        OutlinedButton(onClick = onClick) { Text(label) }
+    }
+}
+
+@Composable
+private fun EngineRow(name: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier.clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(selected = selected, onClick = onClick)
@@ -54,12 +87,13 @@ private fun EngineRow(name: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Homepage, search engine, theme, accent colour, start-page shortcuts, data clearing. */
+/** Layout, homepage, search engines, theme, accent colour, start-page shortcuts, data clearing. */
 @Composable
-fun BrowserSettingsScreen(vm: AgentViewModel) {
+fun BrowserSettingsScreen(vm: AgentViewModel, prefs: AppPrefs) {
     val cs = MaterialTheme.colorScheme
     var homepage by remember { mutableStateOf(vm.store.homepage) }
-    var custom by remember { mutableStateOf(vm.store.customSearchUrl) }
+    var newName by remember { mutableStateOf("") }
+    var newUrl by remember { mutableStateOf("") }
     var rows by remember {
         mutableStateOf(vm.shortcuts.map { SRow(UUID.randomUUID().toString(), it.title, it.url) })
     }
@@ -69,6 +103,21 @@ fun BrowserSettingsScreen(vm: AgentViewModel) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // ---------------------------------------------------------------- layout
+        Text("Layout", style = MaterialTheme.typography.titleLarge)
+        Text("Navigation bar (back, forward, AI, home, menu)", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Choice(prefs.navBarTop, "Top") { prefs.chooseNavTop(true) }
+            Choice(!prefs.navBarTop, "Bottom") { prefs.chooseNavTop(false) }
+        }
+        Text("Address bar", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Choice(!prefs.addressBarBottom, "Top") { prefs.chooseAddressBottom(false) }
+            Choice(prefs.addressBarBottom, "Bottom") { prefs.chooseAddressBottom(true) }
+        }
+
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
         // ---------------------------------------------------------------- homepage
         Text("Homepage", style = MaterialTheme.typography.titleLarge)
         Text(
@@ -91,25 +140,74 @@ fun BrowserSettingsScreen(vm: AgentViewModel) {
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
-        // ---------------------------------------------------------------- search engine
+        // ---------------------------------------------------------------- search engines
         Text("Search engine", style = MaterialTheme.typography.titleLarge)
         for (e in SEARCH_ENGINES) {
-            EngineRow(e.name, vm.searchEngine == e.key) { vm.chooseSearch(e.key, custom) }
+            EngineRow(e.name, vm.searchEngine == e.key, Modifier.fillMaxWidth()) {
+                vm.chooseSearch(e.key, "")
+            }
         }
-        EngineRow("Custom", vm.searchEngine == "custom") { vm.chooseSearch("custom", custom) }
-        if (vm.searchEngine == "custom") {
-            OutlinedTextField(
-                value = custom,
-                onValueChange = {
-                    custom = it
-                    vm.chooseSearch("custom", it)
+        for (c in prefs.customEngines) {
+            val selected = vm.searchEngine == "custom" && vm.store.customSearchUrl == c.template
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                EngineRow(c.name, selected, Modifier.weight(1f)) { vm.chooseSearch("custom", c.template) }
+                TextButton(
+                    onClick = {
+                        prefs.saveEngines(prefs.customEngines.filter { it != c })
+                        if (selected) vm.chooseSearch("duckduckgo", "")
+                    },
+                ) { Text("Delete") }
+            }
+        }
+
+        Text("Add a search engine", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Search for the word test on that site, copy the address of the results page and paste it " +
+                "below. The app finds the search word and replaces it with %s for you. You can also paste " +
+                "an address that already contains %s.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedTextField(
+            value = newName,
+            onValueChange = { newName = it },
+            singleLine = true,
+            label = { Text("Name (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = newUrl,
+            onValueChange = { newUrl = it },
+            singleLine = true,
+            label = { Text("Address of a results page") },
+            placeholder = { Text("https://example.com/search?q=test") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (newUrl.isNotBlank()) {
+            val preview = toSearchTemplate(newUrl)
+            Text(
+                if (preview != null) {
+                    "Will search: " + preview
+                } else {
+                    "Could not find the search word. Add %s where the search text goes."
                 },
-                singleLine = true,
-                label = { Text("Search URL, with %s where the search text goes") },
-                placeholder = { Text("https://example.com/search?q=%s") },
-                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (preview != null) cs.primary else cs.error,
             )
         }
+        Button(
+            onClick = {
+                val t = toSearchTemplate(newUrl)
+                if (t != null) {
+                    val name = newName.trim().ifBlank { hostOf(t) }
+                    prefs.saveEngines(prefs.customEngines + CustomEngine(name, t))
+                    vm.chooseSearch("custom", t)
+                    newName = ""
+                    newUrl = ""
+                    note = "Added '" + name + "' and selected it."
+                }
+            },
+            enabled = toSearchTemplate(newUrl) != null,
+        ) { Text("Add search engine") }
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
@@ -117,11 +215,7 @@ fun BrowserSettingsScreen(vm: AgentViewModel) {
         Text("Theme", style = MaterialTheme.typography.titleLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((key, label) in listOf("system" to "System", "light" to "Light", "dark" to "Dark")) {
-                if (vm.themeMode == key) {
-                    Button(onClick = { vm.chooseTheme(key) }) { Text(label) }
-                } else {
-                    OutlinedButton(onClick = { vm.chooseTheme(key) }) { Text(label) }
-                }
+                Choice(vm.themeMode == key, label) { vm.chooseTheme(key) }
             }
         }
         Text("Accent colour", style = MaterialTheme.typography.titleMedium)

@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.browseragent.agent.AgentViewModel
+import app.browseragent.data.AppPrefs
 
 private enum class SPage { HUB, BROWSER, TEAM, PROMPT, PROVIDERS, MCP }
 
@@ -33,7 +34,7 @@ private enum class SPage { HUB, BROWSER, TEAM, PROMPT, PROVIDERS, MCP }
  * Back goes from a page to this list, and from the list back to the browser.
  */
 @Composable
-fun SettingsNav(vm: AgentViewModel, onExit: () -> Unit) {
+fun SettingsNav(vm: AgentViewModel, prefs: AppPrefs, onExit: () -> Unit) {
     var page by remember { mutableStateOf(SPage.HUB) }
     BackHandler(enabled = page != SPage.HUB) { page = SPage.HUB }
 
@@ -59,7 +60,7 @@ fun SettingsNav(vm: AgentViewModel, onExit: () -> Unit) {
         Box(Modifier.weight(1f)) {
             when (page) {
                 SPage.HUB -> Hub { page = it }
-                SPage.BROWSER -> BrowserSettingsScreen(vm)
+                SPage.BROWSER -> BrowserSettingsScreen(vm, prefs)
                 SPage.TEAM -> TeamSettingsScreen(vm)
                 SPage.PROMPT -> SettingsScreen(vm)
                 SPage.PROVIDERS -> ProvidersScreen(vm)
@@ -77,7 +78,7 @@ private fun Hub(go: (SPage) -> Unit) {
     ) {
         HubRow(
             "Browser & appearance",
-            "Homepage, search engine, theme, accent colour, start-page shortcuts",
+            "Bar positions, homepage, search engines, theme, accent colour, start-page shortcuts",
         ) { go(SPage.BROWSER) }
         HubRow(
             "Agent team",
