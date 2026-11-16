@@ -24,12 +24,13 @@ import app.browseragent.data.AppPrefs
 import java.text.DateFormat
 import java.util.Date
 
-internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS }
+internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS }
 
 private fun titleOf(p: Page): String = when (p) {
     Page.HISTORY -> "History"
     Page.CHATS -> "AI chats"
     Page.SETTINGS -> "Settings"
+    Page.TABS -> "Tabs"
     Page.BROWSER -> ""
 }
 
@@ -66,6 +67,7 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
                                     page = Page.BROWSER
                                     aiOpen = true
                                 }
+                                Page.TABS -> TabsScreen(browser) { page = Page.BROWSER }
                                 else -> {}
                             }
                         }
@@ -93,7 +95,7 @@ private fun SubBar(title: String, onBack: () -> Unit) {
         Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onBack) { Text("← Back") }
+        TextButton(onClick = onBack) { Text("\u2190 Back") }
         Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
@@ -110,11 +112,18 @@ private fun BrowserPage(
     onToggleAi: () -> Unit,
     go: (Page) -> Unit,
 ) {
-    val showWeb = visible && !browser.isHome
+    val aiOn = vm.prefs.agentEnabled
+    val home = browser.isHome
+    val showWeb = visible && !home && browser.pageError == null
+
     Column(Modifier.fillMaxSize()) {
-        if (prefs.navBarTop) NavBar(vm, browser, aiOpen, onToggleAi, go)
-        if (!prefs.addressBarBottom) {
-            AddressBar(browser)
+        if (prefs.navBarTop) {
+            // One row: back, forward, address bar, AI, menu.
+            TopBar(vm, browser, aiOpen && aiOn, onToggleAi, go)
+            ProgressLine(browser)
+        } else if (!prefs.addressBarBottom && !home) {
+            // The start page has its own search box, so no separate address bar there.
+            AddressBar(browser, Modifier.fillMaxWidth())
             ProgressLine(browser)
         }
 
@@ -124,19 +133,27 @@ private fun BrowserPage(
                 update = { v -> v.visibility = if (showWeb) View.VISIBLE else View.INVISIBLE },
                 modifier = Modifier.fillMaxSize(),
             )
-            if (browser.isHome) {
-                StartPage(vm, browser, onAskAi = { if (!aiOpen) onToggleAi() })
+            val err = browser.pageError
+            if (home) {
+                StartPage(
+                    vm,
+                    browser,
+                    showAi = aiOn,
+                    onAskAi = { if (aiOn && !aiOpen) onToggleAi() },
+                )
+            } else if (err != null) {
+                ErrorPage(browser, err)
             }
         }
 
-        if (aiOpen) {
+        if (aiOpen && aiOn) {
             AiPanel(vm, Modifier.weight(1f).fillMaxWidth(), onClose = onToggleAi)
         }
-        if (prefs.addressBarBottom) {
+        if (!prefs.navBarTop && prefs.addressBarBottom && !home) {
             ProgressLine(browser)
-            AddressBar(browser)
+            AddressBar(browser, Modifier.fillMaxWidth())
         }
-        if (!prefs.navBarTop) NavBar(vm, browser, aiOpen, onToggleAi, go)
+        if (!prefs.navBarTop) NavBar(vm, browser, aiOpen && aiOn, onToggleAi, go)
     }
 }
 
@@ -180,14 +197,14 @@ private fun HistoryScreen(vm: AgentViewModel, browser: BrowserController, onOpen
                     Column(Modifier.weight(1f)) {
                         Text(h.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
                         Text(
-                            hostOf(h.url) + "  ·  " + fmt.format(Date(h.time)),
+                            hostOf(h.url) + "  \u00b7  " + fmt.format(Date(h.time)),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    TextButton(onClick = { vm.history.remove(h) }) { Text("✕") }
+                    TextButton(onClick = { vm.history.remove(h) }) { Text("\u2715") }
                 }
             }
         }
@@ -249,12 +266,12 @@ private fun ChatsScreen(vm: AgentViewModel, onOpen: () -> Unit) {
                         )
                         val n = c.entries.count { it.kind == Kind.USER.name }
                         Text(
-                            fmt.format(Date(c.updated)) + "  ·  " + n + " message(s)",
+                            fmt.format(Date(c.updated)) + "  \u00b7  " + n + " message(s)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = { vm.deleteChat(c.id) }) { Text("✕") }
+                    TextButton(onClick = { vm.deleteChat(c.id) }) { Text("\u2715") }
                 }
             }
         }

@@ -31,7 +31,12 @@ private fun greeting(): String {
 }
 
 @Composable
-internal fun StartPage(vm: AgentViewModel, browser: BrowserController, onAskAi: () -> Unit) {
+internal fun StartPage(
+    vm: AgentViewModel,
+    browser: BrowserController,
+    showAi: Boolean,
+    onAskAi: () -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     var query by remember { mutableStateOf("") }
     val recent = vm.history.entries.distinctBy { it.url }.take(5)
@@ -65,22 +70,24 @@ internal fun StartPage(vm: AgentViewModel, browser: BrowserController, onAskAi: 
         }
         Spacer(Modifier.height(20.dp))
 
-        Card(Modifier.fillMaxWidth().clickable(onClick = onAskAi)) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(40.dp).clip(CircleShape).background(cs.primary),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("AI", color = cs.onPrimary, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("Ask AI to browse for you", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "Search, read pages and fill forms. You stay in control.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = cs.onSurfaceVariant,
-                    )
+        if (showAi) {
+            Card(Modifier.fillMaxWidth().clickable(onClick = onAskAi)) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(40.dp).clip(CircleShape).background(cs.primary),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("AI", color = cs.onPrimary, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Ask AI to browse for you", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Search, read pages and fill forms. You stay in control.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = cs.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

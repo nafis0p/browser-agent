@@ -215,10 +215,15 @@
 
   port.postMessage({ type: 'hello', top: isTop, url: location.href });
 
-  // ---- Tell the app which page is open (for the browsing history).
+  // ---- Tell the app which page is open (browsing history) and its HTTP status (404 page).
   function sendPage() {
     if (!isTop) return;
-    port.postMessage({ type: 'page', url: location.href, title: document.title });
+    var status = 0;
+    try {
+      var nav = performance.getEntriesByType('navigation')[0];
+      if (nav && nav.responseStatus) status = nav.responseStatus;
+    } catch (e) {}
+    port.postMessage({ type: 'page', url: location.href, title: document.title, status: status });
   }
   document.addEventListener('DOMContentLoaded', sendPage);
   window.addEventListener('load', function () {
