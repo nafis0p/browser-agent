@@ -8,7 +8,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
-/** A search engine added by the user. template contains %s where the search text goes. */
+/** A search engine added by the user. The template contains %s where the search text goes. */
 @Serializable
 data class CustomEngine(val name: String, val template: String)
 
