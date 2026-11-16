@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.browseragent.browser.BrowserController
+import app.browseragent.data.AppPrefs
 import app.browseragent.data.Chat
 import app.browseragent.data.ChatEntry
 import app.browseragent.data.ChatStore
@@ -30,6 +31,9 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
     val store = Store(app)
     val history = HistoryStore(app)
     val chats = ChatStore(app)
+
+    /** Interface and privacy preferences (one shared instance for the whole app). */
+    val prefs = AppPrefs(app)
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -55,6 +59,10 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
     val entries = mutableStateListOf<LogEntry>()
 
     var running by mutableStateOf(false)
+        private set
+
+    /** True while the agent is paused between two steps. */
+    var paused by mutableStateOf(false)
         private set
 
     var pendingConfirm by mutableStateOf<String?>(null)
@@ -89,7 +97,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
             browser = b
             b.searchTemplate = store.searchTemplate()
             b.onPageLoaded = { url, title -> history.record(url, title) }
-            agent = Agent(router, b, hub, store, this)
+            agent = Agent(router, b, hub, store, this, prefs)
             orchestrator = Orchestrator(
                 router,
                 b,
@@ -154,6 +162,10 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
     fun send(goal: String) {
         val a = agent ?: return
         if (running) return
+        if (!prefs.agentEnabled) {
+            entries.add(LogEntry(Kind.INFO, "The AI assistant is turned off (Settings > AI settings > Behaviour & privacy)."))
+            return
+        }
         running = true
         entries.add(LogEntry(Kind.USER, goal))
         persistChat()
@@ -171,6 +183,8 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
                 entries.add(LogEntry(Kind.ERROR, e.message ?: e.toString()))
             } finally {
                 running = false
+                paused = false
+                a.pauseRun(false)
                 pending?.complete(false)
                 pendingConfirm = null
                 store.aliasOverride = null
@@ -181,6 +195,16 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
 
     fun stop() {
         job?.cancel()
+    }
+
+    fun pause() {
+        paused = true
+        agent?.pauseRun(true)
+    }
+
+    fun resume() {
+        paused = false
+        agent?.pauseRun(false)
     }
 
     fun newChat() {

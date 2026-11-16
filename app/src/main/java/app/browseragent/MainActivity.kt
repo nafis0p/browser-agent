@@ -13,17 +13,14 @@ import androidx.compose.ui.graphics.Color
 import app.browseragent.agent.AgentViewModel
 import app.browseragent.browser.BrowserController
 import app.browseragent.data.ACCENTS
-import app.browseragent.data.AppPrefs
 import app.browseragent.ui.AppRoot
 
 class MainActivity : ComponentActivity() {
     private val vm: AgentViewModel by viewModels()
     private lateinit var browser: BrowserController
-    private lateinit var prefs: AppPrefs
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = AppPrefs(this)
         browser = BrowserController(this)
         vm.attach(browser)
 
@@ -70,7 +67,7 @@ class MainActivity : ComponentActivity() {
                     onPrimaryContainer = primary,
                 )
             }
-            MaterialTheme(colorScheme = scheme) { AppRoot(vm, browser, prefs) }
+            MaterialTheme(colorScheme = scheme) { AppRoot(vm, browser, vm.prefs) }
         }
     }
 

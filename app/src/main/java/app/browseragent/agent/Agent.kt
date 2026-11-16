@@ -1,6 +1,7 @@
 package app.browseragent.agent
 
 import app.browseragent.browser.BrowserController
+import app.browseragent.data.AppPrefs
 import app.browseragent.data.Store
 import app.browseragent.llm.LlmException
 import app.browseragent.llm.LlmRouter
@@ -116,7 +117,7 @@ How it works:
 - Take the smallest useful step, then verify the result in the next snapshot.
 
 The user shares this browser with you:
-- The user also clicks, types and navigates by hand. Each new message comes with a fresh snapshot, and the user's manual actions are reported to you as activity notes. Always treat the newest snapshot as the truth.
+- The user also clicks, types and navigates by hand. Each new message comes with a fresh snapshot, and the user's manual actions are reported to you as activity notes (when the user allows it). Always treat the newest snapshot as the truth.
 - Before every action, compare the goal with the page: if a field already holds the right value, a step is already done, or you are already on the right page, do NOT do it again.
 - Never submit, pay, send or confirm the same thing twice. If you are not sure whether something already happened, check with snapshot first.
 - You are also given a list of actions you already completed. Do not repeat them unless the page shows they were undone.
@@ -154,6 +155,7 @@ class Agent(
     private val hub: McpHub,
     private val store: Store,
     private val ui: AgentUi,
+    private val prefs: AppPrefs,
 ) {
     private val messages = mutableListOf<JsonObject>()
     private val snapshotIdx = mutableListOf<Int>()
@@ -167,6 +169,9 @@ class Agent(
     private var lastAfter = 0
     private var userTouched = false
 
+    @Volatile
+    private var paused = false
+
     fun reset() {
         messages.clear()
         snapshotIdx.clear()
@@ -176,6 +181,24 @@ class Agent(
         lastBefore = 0
         lastAfter = 0
         userTouched = false
+        paused = false
+    }
+
+    /** Pause or resume the run. A paused agent stops before its next step. */
+    fun pauseRun(value: Boolean) {
+        paused = value
+    }
+
+    private suspend fun waitIfPaused() {
+        if (!paused) return
+        ui.log(Kind.INFO, "Paused. Tap Resume to continue.")
+        while (paused) delay(150)
+    }
+
+    /** What the user did by hand. Always cleared, but only passed on when sharing is switched on. */
+    private fun drainActivity(): List<String> {
+        val events = browser.drainUserEvents()
+        return if (prefs.shareActivity) events.map { redact(it) } else emptyList()
     }
 
     // ------------------------------------------------------------ private data (vault)
@@ -259,7 +282,7 @@ class Agent(
         }
 
     suspend fun run(goalRaw: String) {
-        // Every turn starts from the real, current page and from what the user did by hand.
+        // Every turn starts from the real, current page and (if allowed) from what the user did by hand.
         val freshRaw = try {
             if (browser.url == "about:blank") "(blank page)" else browser.snapshot()
         } catch (e: CancellationException) {
@@ -269,7 +292,9 @@ class Agent(
         }
         lastSnapshot = freshRaw
         val fresh = redact(freshRaw)
-        val seen = browser.drainUserEvents().map { redact(it) }
+        // Without activity sharing the agent cannot know what changed, so it must not skip actions.
+        if (!prefs.shareActivity) userTouched = true
+        val seen = drainActivity()
         if (seen.isNotEmpty()) {
             userTouched = true
             ui.log(Kind.INFO, "Noticed your actions: " + seen.joinToString("; "))
@@ -286,8 +311,9 @@ class Agent(
         val alias = store.activeAlias ?: throw LlmException("Add a model in the Providers tab first.")
 
         for (step in 1..MAX_STEPS) {
+            waitIfPaused()
             if (step > 1) {
-                val more = browser.drainUserEvents().map { redact(it) }
+                val more = drainActivity()
                 if (more.isNotEmpty()) {
                     userTouched = true
                     ui.log(Kind.INFO, "Noticed your actions: " + more.joinToString("; "))
@@ -317,6 +343,7 @@ class Agent(
             val base = messages.size
             for (c in res.toolCalls) messages.add(toolMsg(c.id, "(cancelled before execution)"))
             for ((i, call) in res.toolCalls.withIndex()) {
+                waitIfPaused()
                 ui.log(Kind.TOOL, call.name + "(" + call.arguments.take(120) + ")")
                 val (text, isSnapshot) = execute(call, entries)
                 if (isSnapshot) {

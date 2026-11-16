@@ -27,24 +27,36 @@ import androidx.compose.ui.unit.dp
 import app.browseragent.agent.AgentViewModel
 import app.browseragent.data.AppPrefs
 
-private enum class SPage { HUB, BROWSER, TEAM, PROMPT, PROVIDERS, MCP }
+private enum class SPage { HUB, BROWSER, AI, PROVIDERS, FRAMEWORK, PROMPT, MCP, PRIVACY }
+
+/** Where Back goes: AI sub-pages return to "AI settings", the rest to the main list. */
+private fun parentOf(p: SPage): SPage = when (p) {
+    SPage.HUB -> SPage.HUB
+    SPage.BROWSER, SPage.AI -> SPage.HUB
+    else -> SPage.AI
+}
 
 /**
- * All settings pages live here. To add a page: add an SPage value, a title and a Hub row.
- * Back goes from a page to this list, and from the list back to the browser.
+ * All settings pages live here.
+ * Settings
+ *   Browser & appearance
+ *   AI settings
+ *     Providers & models / Agent framework / Instructions & personal data / MCP servers / Behaviour & privacy
  */
 @Composable
 fun SettingsNav(vm: AgentViewModel, prefs: AppPrefs, onExit: () -> Unit) {
     var page by remember { mutableStateOf(SPage.HUB) }
-    BackHandler(enabled = page != SPage.HUB) { page = SPage.HUB }
+    BackHandler(enabled = page != SPage.HUB) { page = parentOf(page) }
 
     val title = when (page) {
         SPage.HUB -> "Settings"
         SPage.BROWSER -> "Browser & appearance"
-        SPage.TEAM -> "Agent team"
-        SPage.PROMPT -> "AI instructions & personal data"
-        SPage.PROVIDERS -> "Providers & models"
-        SPage.MCP -> "MCP servers"
+        SPage.AI -> "AI settings"
+        SPage.PROVIDERS -> "AI settings \u203a Providers & models"
+        SPage.FRAMEWORK -> "AI settings \u203a Agent framework"
+        SPage.PROMPT -> "AI settings \u203a Instructions & data"
+        SPage.MCP -> "AI settings \u203a MCP servers"
+        SPage.PRIVACY -> "AI settings \u203a Behaviour & privacy"
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -52,26 +64,28 @@ fun SettingsNav(vm: AgentViewModel, prefs: AppPrefs, onExit: () -> Unit) {
             Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = { if (page == SPage.HUB) onExit() else page = SPage.HUB }) {
-                Text("← Back")
+            TextButton(onClick = { if (page == SPage.HUB) onExit() else page = parentOf(page) }) {
+                Text("\u2190 Back")
             }
             Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Box(Modifier.weight(1f)) {
             when (page) {
-                SPage.HUB -> Hub { page = it }
+                SPage.HUB -> MainHub { page = it }
+                SPage.AI -> AiHub { page = it }
                 SPage.BROWSER -> BrowserSettingsScreen(vm, prefs)
-                SPage.TEAM -> TeamSettingsScreen(vm)
-                SPage.PROMPT -> SettingsScreen(vm)
                 SPage.PROVIDERS -> ProvidersScreen(vm)
+                SPage.FRAMEWORK -> TeamSettingsScreen(vm)
+                SPage.PROMPT -> SettingsScreen(vm)
                 SPage.MCP -> McpScreen(vm)
+                SPage.PRIVACY -> AiPrivacyScreen(vm)
             }
         }
     }
 }
 
 @Composable
-private fun Hub(go: (SPage) -> Unit) {
+private fun MainHub(go: (SPage) -> Unit) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -81,21 +95,38 @@ private fun Hub(go: (SPage) -> Unit) {
             "Bar positions, homepage, search engines, theme, accent colour, start-page shortcuts",
         ) { go(SPage.BROWSER) }
         HubRow(
-            "Agent team",
-            "One agent, or a planner + executor + checker with their own models and instructions",
-        ) { go(SPage.TEAM) }
-        HubRow(
-            "AI instructions & personal data",
-            "System prompt, and the placeholders for email, password, phone, card...",
-        ) { go(SPage.PROMPT) }
+            "AI settings",
+            "Providers, agent framework, instructions, tools, behaviour and privacy",
+        ) { go(SPage.AI) }
+    }
+}
+
+@Composable
+private fun AiHub(go: (SPage) -> Unit) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         HubRow(
             "Providers & models",
-            "API keys and fallback routes between providers",
+            "API keys and the fallback routes between providers",
         ) { go(SPage.PROVIDERS) }
+        HubRow(
+            "Agent framework",
+            "One agent, or a team: planner + executor + checker, each with its own model and instructions",
+        ) { go(SPage.FRAMEWORK) }
+        HubRow(
+            "Instructions & personal data",
+            "System prompt, and the placeholders for email, password, phone, card...",
+        ) { go(SPage.PROMPT) }
         HubRow(
             "MCP servers",
             "Extra tools for the AI",
         ) { go(SPage.MCP) }
+        HubRow(
+            "Behaviour & privacy",
+            "Turn the AI on or off, and choose whether it is told what you do by hand",
+        ) { go(SPage.PRIVACY) }
     }
 }
 

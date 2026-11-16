@@ -64,11 +64,13 @@ private fun groupEntries(entries: List<LogEntry>): List<ChatItem> {
 internal fun AiPanel(vm: AgentViewModel, modifier: Modifier, onClose: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
+    var moreOpen by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
     val ctx = LocalContext.current
     val groups = remember(vm.entries.size) { groupEntries(vm.entries.toList()) }
     val opened = remember { mutableStateMapOf<Int, Boolean>() }
+    val enabled = vm.prefs.agentEnabled
 
     fun copy(text: String) {
         clipboard.setText(AnnotatedString(text))
@@ -84,7 +86,7 @@ internal fun AiPanel(vm: AgentViewModel, modifier: Modifier, onClose: () -> Unit
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box {
                     TextButton(onClick = { menuOpen = true }) {
-                        Text("✦ " + (vm.activeAlias ?: "No model"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("\u2726 " + (vm.activeAlias ?: "No model"), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         vm.aliases.forEach { a ->
@@ -96,53 +98,83 @@ internal fun AiPanel(vm: AgentViewModel, modifier: Modifier, onClose: () -> Unit
                     }
                 }
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = { copy(chatText(vm.entries)) }) { Text("Copy all") }
-                TextButton(onClick = { vm.newChat() }) { Text("New") }
-                TextButton(onClick = onClose) { Text("✕") }
+                if (vm.running) {
+                    TextButton(onClick = { if (vm.paused) vm.resume() else vm.pause() }) {
+                        Text(if (vm.paused) "Resume" else "Pause")
+                    }
+                }
+                Box {
+                    TextButton(onClick = { moreOpen = true }) { Text("\u22ee") }
+                    DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                        MenuRow("Copy all") {
+                            moreOpen = false
+                            copy(chatText(vm.entries))
+                        }
+                        MenuRow("New chat") {
+                            moreOpen = false
+                            vm.newChat()
+                        }
+                        MenuRow(
+                            if (vm.prefs.shareActivity) "\u2713 Share my activity with AI" else "Share my activity with AI",
+                        ) {
+                            moreOpen = false
+                            vm.prefs.chooseShareActivity(!vm.prefs.shareActivity)
+                        }
+                    }
+                }
+                TextButton(onClick = onClose) { Text("\u2715") }
             }
 
-            if (vm.entries.isEmpty()) {
-                EmptyChat(Modifier.weight(1f).fillMaxWidth()) { vm.send(it) }
+            if (!enabled) {
+                Text(
+                    "The AI assistant is turned off. Turn it on in Settings > AI settings > Behaviour & privacy.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f).padding(16.dp),
+                )
             } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    items(groups) { g ->
-                        when (g) {
-                            is ChatItem.Msg -> Bubble(g.e) { copy(it) }
-                            is ChatItem.Steps -> {
-                                val isLast = g === groups.last()
-                                val open = opened[g.start] ?: (isLast && vm.running)
-                                StepsGroup(g.lines, open) { opened[g.start] = !open }
+                if (vm.entries.isEmpty()) {
+                    EmptyChat(Modifier.weight(1f).fillMaxWidth()) { vm.send(it) }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(groups) { g ->
+                            when (g) {
+                                is ChatItem.Msg -> Bubble(g.e) { copy(it) }
+                                is ChatItem.Steps -> {
+                                    val isLast = g === groups.last()
+                                    val open = opened[g.start] ?: (isLast && vm.running)
+                                    StepsGroup(g.lines, open) { opened[g.start] = !open }
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Ask or tell the AI what to do") },
-                    maxLines = 3,
-                    shape = RoundedCornerShape(24.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                if (vm.running) {
-                    Button(onClick = { vm.stop() }) { Text("Stop") }
-                } else {
-                    Button(
-                        onClick = {
-                            if (input.isNotBlank()) {
-                                vm.send(input.trim())
-                                input = ""
-                            }
-                        },
-                    ) { Text("Send") }
+                Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Ask or tell the AI what to do") },
+                        maxLines = 3,
+                        shape = RoundedCornerShape(24.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    if (vm.running) {
+                        Button(onClick = { vm.stop() }) { Text("Stop") }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (input.isNotBlank()) {
+                                    vm.send(input.trim())
+                                    input = ""
+                                }
+                            },
+                        ) { Text("Send") }
+                    }
                 }
             }
         }
@@ -164,7 +196,7 @@ private fun StepsGroup(lines: List<LogEntry>, expanded: Boolean, onToggle: () ->
     ) {
         Column(Modifier.clickable(onClick = onToggle).padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (expanded) "▾" else "▸", color = cs.onSurfaceVariant)
+                Text(if (expanded) "\u25be" else "\u25b8", color = cs.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     if (actions == 0) "Details" else actions.toString() + (if (actions == 1) " step" else " steps"),
@@ -187,7 +219,7 @@ private fun StepsGroup(lines: List<LogEntry>, expanded: Boolean, onToggle: () ->
                 Spacer(Modifier.height(6.dp))
                 for (l in lines) {
                     Text(
-                        (if (l.kind == Kind.TOOL) "› " else "• ") + l.text,
+                        (if (l.kind == Kind.TOOL) "\u203a " else "\u2022 ") + l.text,
                         style = MaterialTheme.typography.labelSmall,
                         color = cs.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 1.dp),

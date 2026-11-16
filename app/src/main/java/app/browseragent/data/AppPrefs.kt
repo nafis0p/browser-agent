@@ -8,13 +8,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
-/** A search engine added by the user. The template contains %s where the search text goes. */
+/** A search engine added by the user. template contains %s where the search text goes. */
 @Serializable
 data class CustomEngine(val name: String, val template: String)
 
 /**
- * Interface preferences, observable by the UI. (Functions that change them are named
- * choose *save* so they never clash with the generated property setters.)
+ * Interface and privacy preferences, observable by the UI. (Functions that change them are named
+ * choose*/save* so they never clash with the generated property setters.)
  */
 class AppPrefs(context: Context) {
     private val sp = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
@@ -32,6 +32,14 @@ class AppPrefs(context: Context) {
     var customEngines by mutableStateOf(loadEngines())
         private set
 
+    /** False: the AI assistant is switched off (nothing is sent to any AI provider). */
+    var agentEnabled by mutableStateOf(sp.getBoolean("agent_enabled", true))
+        private set
+
+    /** False: what the user clicks, types and opens by hand is not reported to the AI. */
+    var shareActivity by mutableStateOf(sp.getBoolean("share_activity", true))
+        private set
+
     fun chooseNavTop(top: Boolean) {
         navBarTop = top
         sp.edit().putBoolean("nav_top", top).apply()
@@ -40,6 +48,16 @@ class AppPrefs(context: Context) {
     fun chooseAddressBottom(bottom: Boolean) {
         addressBarBottom = bottom
         sp.edit().putBoolean("addr_bottom", bottom).apply()
+    }
+
+    fun chooseAgentEnabled(on: Boolean) {
+        agentEnabled = on
+        sp.edit().putBoolean("agent_enabled", on).apply()
+    }
+
+    fun chooseShareActivity(on: Boolean) {
+        shareActivity = on
+        sp.edit().putBoolean("share_activity", on).apply()
     }
 
     fun saveEngines(list: List<CustomEngine>) {
