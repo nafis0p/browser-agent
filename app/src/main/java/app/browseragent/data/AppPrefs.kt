@@ -14,7 +14,7 @@ data class CustomEngine(val name: String, val template: String)
 
 /**
  * Interface preferences, observable by the UI. (Functions that change them are named
- * choose*/save* so they never clash with the generated property setters.)
+ * choose *save* so they never clash with the generated property setters.)
  */
 class AppPrefs(context: Context) {
     private val sp = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
