@@ -35,11 +35,15 @@ private fun JsonObject.str(k: String): String = (this[k] as? JsonPrimitive)?.con
 /**
  * One browser tab: its own Firefox session and its own connection to the page scripts.
  * The BrowserController keeps the list of tabs and decides which one is shown.
+ *
+ * A tab restored from the last run stays asleep (no Firefox session yet) until it is shown.
  */
 class BrowserTab internal constructor(
     val id: Int,
     private val owner: BrowserController,
-    runtime: GeckoRuntime,
+    private val runtime: GeckoRuntime,
+    restoredUrl: String? = null,
+    restoredTitle: String = "",
 ) {
     val session = GeckoSession()
 
@@ -69,6 +73,7 @@ class BrowserTab internal constructor(
 
     @Volatile
     private var loading = false
+    private var opened = false
     private var pendingUrl: String? = null
     private var userStopped = false
     private var lastStopFailed = false
@@ -109,6 +114,7 @@ class BrowserTab internal constructor(
                     } else {
                         owner.recordPage(pageUrl, pageTitle)
                     }
+                    owner.tabsChanged()
                 }
                 "user" -> {
                     val label = m.optString("label")
@@ -169,6 +175,7 @@ class BrowserTab internal constructor(
                             600,
                         )
                     }
+                    owner.tabsChanged()
                 }
 
                 override fun onProgressChange(session: GeckoSession, value: Int) {
@@ -187,10 +194,28 @@ class BrowserTab internal constructor(
                 }
             },
         )
-        session.open(runtime)
+
+        // A tab restored from the last run: it shows its old address and loads when it is opened.
+        if (!restoredUrl.isNullOrBlank()) {
+            url = restoredUrl
+            title = restoredTitle
+            isHome = false
+            pendingUrl = restoredUrl
+        }
     }
 
     // ---------------------------------------------------------------- setup and navigation
+
+    internal fun isOpened(): Boolean = opened
+
+    /** Starts the Firefox session of a tab that was asleep. Called when the tab is shown. */
+    internal fun ensureOpen(ext: WebExtension?) {
+        if (opened) return
+        opened = true
+        session.open(runtime)
+        if (ext != null) installBridge(ext)
+        if (owner.extensionReady) onExtensionReady()
+    }
 
     internal fun installBridge(ext: WebExtension) {
         session.webExtensionController.setMessageDelegate(ext, messageDelegate, NATIVE_APP)
@@ -207,11 +232,12 @@ class BrowserTab internal constructor(
     fun load(target: String) {
         isHome = false
         pageError = null
-        if (owner.extensionReady) session.loadUri(target) else pendingUrl = target
+        if (opened && owner.extensionReady) session.loadUri(target) else pendingUrl = target
     }
 
     fun showHome() {
         isHome = true
+        owner.tabsChanged()
     }
 
     fun dismissError() {
@@ -259,7 +285,7 @@ class BrowserTab internal constructor(
 
     fun destroy() {
         handler.removeCallbacksAndMessages(null)
-        session.close()
+        if (opened) session.close()
     }
 
     // ---------------------------------------------------------------- agent API

@@ -40,8 +40,11 @@ private fun titleOf(p: Page): String = when (p) {
 fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
     var page by remember { mutableStateOf(Page.BROWSER) }
     var aiOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     BackHandler(enabled = page != Page.BROWSER) { page = Page.BROWSER }
+    // Registered last, so Back closes the menu first.
+    BackHandler(enabled = menuOpen) { menuOpen = false }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // The browser stays composed so the Firefox view keeps its state.
@@ -53,6 +56,7 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
             aiOpen = aiOpen,
             onToggleAi = { aiOpen = !aiOpen },
             go = { page = it },
+            onMenu = { menuOpen = true },
         )
         if (page != Page.BROWSER) {
             Surface(Modifier.fillMaxSize().pointerInput(Unit) {}) {
@@ -75,6 +79,16 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
                 }
             }
         }
+
+        SideMenu(
+            open = menuOpen && page == Page.BROWSER,
+            onClose = { menuOpen = false },
+            vm = vm,
+            browser = browser,
+            aiOpen = aiOpen,
+            onToggleAi = { aiOpen = !aiOpen },
+            go = { page = it },
+        )
     }
 
     val ask = vm.pendingConfirm
@@ -111,6 +125,7 @@ private fun BrowserPage(
     aiOpen: Boolean,
     onToggleAi: () -> Unit,
     go: (Page) -> Unit,
+    onMenu: () -> Unit,
 ) {
     val aiOn = vm.prefs.agentEnabled
     val home = browser.isHome
@@ -119,7 +134,7 @@ private fun BrowserPage(
     Column(Modifier.fillMaxSize()) {
         if (prefs.navBarTop) {
             // One row: back, forward, address bar, AI, menu.
-            TopBar(vm, browser, aiOpen && aiOn, onToggleAi, go)
+            TopBar(vm, browser, aiOpen && aiOn, onToggleAi, onMenu)
             ProgressLine(browser)
         } else if (!prefs.addressBarBottom && !home) {
             // The start page has its own search box, so no separate address bar there.
@@ -153,7 +168,7 @@ private fun BrowserPage(
             ProgressLine(browser)
             AddressBar(browser, Modifier.fillMaxWidth())
         }
-        if (!prefs.navBarTop) NavBar(vm, browser, aiOpen && aiOn, onToggleAi, go)
+        if (!prefs.navBarTop) NavBar(vm, browser, aiOpen && aiOn, onToggleAi, go, onMenu)
     }
 }
 

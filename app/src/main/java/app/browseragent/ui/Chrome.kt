@@ -1,7 +1,5 @@
 package app.browseragent.ui
 
-import android.content.Intent
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,10 +17,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -34,7 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.browseragent.agent.AgentViewModel
 import app.browseragent.browser.BrowserController
-import app.browseragent.data.Shortcut
 
 internal fun hostOf(u: String): String =
     u.substringAfter("://").substringBefore('/').removePrefix("www.")
@@ -168,93 +162,7 @@ internal fun MenuRow(label: String, onClick: () -> Unit) {
     DropdownMenuItem(text = { Text(label) }, onClick = onClick)
 }
 
-/** The three-dot button with its menu. */
-@Composable
-private fun NavMenu(
-    vm: AgentViewModel,
-    browser: BrowserController,
-    aiOpen: Boolean,
-    onToggleAi: () -> Unit,
-    go: (Page) -> Unit,
-    size: Dp,
-) {
-    val ctx = LocalContext.current
-    val clipboard = LocalClipboardManager.current
-    var menu by remember { mutableStateOf(false) }
-
-    Box {
-        NavButton("\u22ee", true, size) { menu = true }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            MenuRow("Tabs (" + browser.tabs.size + ")") {
-                menu = false
-                go(Page.TABS)
-            }
-            MenuRow("New tab") {
-                menu = false
-                if (!browser.newTab()) {
-                    Toast.makeText(ctx, "Tab limit reached", Toast.LENGTH_SHORT).show()
-                }
-            }
-            MenuRow("Start page") {
-                menu = false
-                browser.showHome()
-            }
-            HorizontalDivider()
-            if (vm.prefs.agentEnabled) {
-                MenuRow("New AI chat") {
-                    menu = false
-                    vm.newChat()
-                    if (!aiOpen) onToggleAi()
-                }
-                MenuRow("AI chat history") {
-                    menu = false
-                    go(Page.CHATS)
-                }
-            }
-            MenuRow("Browsing history") {
-                menu = false
-                go(Page.HISTORY)
-            }
-            HorizontalDivider()
-            MenuRow("Pin page to start page") {
-                menu = false
-                val u = browser.url
-                if (!browser.isHome && u.startsWith("http")) {
-                    vm.saveShortcuts(vm.shortcuts + Shortcut(hostOf(u), u))
-                    Toast.makeText(ctx, "Pinned", Toast.LENGTH_SHORT).show()
-                }
-            }
-            MenuRow("Copy link") {
-                menu = false
-                if (!browser.isHome) {
-                    clipboard.setText(AnnotatedString(browser.url))
-                    Toast.makeText(ctx, "Link copied", Toast.LENGTH_SHORT).show()
-                }
-            }
-            MenuRow("Share link") {
-                menu = false
-                if (!browser.isHome) {
-                    val send = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, browser.url)
-                    }
-                    ctx.startActivity(Intent.createChooser(send, "Share link"))
-                }
-            }
-            MenuRow(if (browser.desktopMode) "\u2713 Desktop site" else "Desktop site") {
-                menu = false
-                browser.setDesktop(!browser.desktopMode)
-            }
-            HorizontalDivider()
-            MenuRow("Settings") {
-                menu = false
-                go(Page.SETTINGS)
-            }
-        }
-    }
-}
-
-/** Bottom bar: back, forward, AI, start page, tabs, menu. */
+/** Bottom bar: back, forward, AI, start page, tabs, menu. The menu opens the side panel. */
 @Composable
 internal fun NavBar(
     vm: AgentViewModel,
@@ -262,6 +170,7 @@ internal fun NavBar(
     aiOpen: Boolean,
     onToggleAi: () -> Unit,
     go: (Page) -> Unit,
+    onMenu: () -> Unit,
 ) {
     Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -274,7 +183,7 @@ internal fun NavBar(
             if (vm.prefs.agentEnabled) AiButton(aiOpen, vm.running, 54.dp, onToggleAi)
             NavButton("\u2302", !browser.isHome) { browser.showHome() }
             TabButton(browser.tabs.size) { go(Page.TABS) }
-            NavMenu(vm, browser, aiOpen, onToggleAi, go, 46.dp)
+            NavButton("\u22ee", true) { onMenu() }
         }
     }
 }
@@ -286,7 +195,7 @@ internal fun TopBar(
     browser: BrowserController,
     aiOpen: Boolean,
     onToggleAi: () -> Unit,
-    go: (Page) -> Unit,
+    onMenu: () -> Unit,
 ) {
     Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -301,7 +210,7 @@ internal fun TopBar(
                 AddressBar(browser, Modifier.weight(1f))
             }
             if (vm.prefs.agentEnabled) AiButton(aiOpen, vm.running, 42.dp, onToggleAi)
-            NavMenu(vm, browser, aiOpen, onToggleAi, go, 38.dp)
+            NavButton("\u22ee", true, 38.dp) { onMenu() }
         }
     }
 }

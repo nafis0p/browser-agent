@@ -24,8 +24,9 @@ class MainActivity : ComponentActivity() {
         browser = BrowserController(this)
         vm.attach(browser)
 
-        // No homepage set: the built-in start page is shown. Otherwise open the homepage.
-        if (savedInstanceState == null) {
+        // The tabs of the last run are brought back. Only when there are none, the homepage
+        // is opened (or the start page is shown when no homepage is set).
+        if (savedInstanceState == null && !browser.restoredTabs) {
             val homepage = vm.store.homepage
             if (homepage.isNotBlank()) browser.load(homepage)
         }
@@ -69,6 +70,12 @@ class MainActivity : ComponentActivity() {
             }
             MaterialTheme(colorScheme = scheme) { AppRoot(vm, browser, vm.prefs) }
         }
+    }
+
+    override fun onStop() {
+        // Remember the open tabs right away in case the system ends the app.
+        browser.persistTabs()
+        super.onStop()
     }
 
     override fun onDestroy() {

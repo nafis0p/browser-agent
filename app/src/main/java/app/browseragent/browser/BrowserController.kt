@@ -6,6 +6,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import app.browseragent.data.SavedTab
+import app.browseragent.data.SavedTabs
+import app.browseragent.data.TabStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.GeckoRuntime
@@ -21,17 +24,22 @@ private const val MAX_TABS = 12
 /**
  * Manages the browser tabs. One GeckoView shows the current tab; every tab has its own session.
  * The properties and functions below act on the current tab, so the rest of the app can treat
- * the controller like a single browser.
+ * the controller like a single browser. The open tabs are remembered between app starts.
  */
 class BrowserController(context: Context) {
     /** The Firefox surface hosted by the UI. */
     val webView: GeckoView = GeckoView(context)
 
     private val runtime: GeckoRuntime = sharedRuntime(context)
+    private val tabStore = TabStore(context)
 
     val tabs = mutableStateListOf<BrowserTab>()
 
     var currentIndex by mutableStateOf(0)
+        private set
+
+    /** True when tabs from the last run were brought back (then the homepage is not opened). */
+    var restoredTabs: Boolean = false
         private set
 
     internal var extensionReady = false
@@ -64,9 +72,20 @@ class BrowserController(context: Context) {
     val pageError: PageError? get() = current.pageError
 
     init {
-        val first = BrowserTab(nextTabId++, this, runtime)
-        tabs.add(first)
-        attach(first)
+        // Bring back the tabs of the last run. They stay asleep until they are shown.
+        val saved = tabStore.load()
+        val list = saved.tabs.take(MAX_TABS)
+        if (list.isEmpty()) {
+            tabs.add(BrowserTab(nextTabId++, this, runtime))
+            currentIndex = 0
+        } else {
+            for (s in list) {
+                tabs.add(BrowserTab(nextTabId++, this, runtime, s.url.ifBlank { null }, s.title))
+            }
+            currentIndex = saved.current.coerceIn(0, tabs.lastIndex)
+            restoredTabs = true
+        }
+        attach(tabs[currentIndex])
 
         // Pages are loaded only after the extension is installed, so its content script
         // is present from the first page on.
@@ -76,7 +95,9 @@ class BrowserController(context: Context) {
                 { ext ->
                     if (ext != null) {
                         extension = ext
-                        for (t in tabs) t.installBridge(ext)
+                        for (t in tabs) {
+                            if (t.isOpened()) t.installBridge(ext)
+                        }
                     }
                     markReady()
                 },
@@ -89,10 +110,14 @@ class BrowserController(context: Context) {
 
     private fun markReady() {
         extensionReady = true
-        for (t in tabs) t.onExtensionReady()
+        for (t in tabs) {
+            if (t.isOpened()) t.onExtensionReady()
+        }
     }
 
+    /** Shows the tab in the Firefox view (and wakes it up if it was asleep). */
     private fun attach(tab: BrowserTab) {
+        tab.ensureOpen(extension)
         if (attached) webView.releaseSession()
         webView.setSession(tab.session)
         attached = true
@@ -102,13 +127,29 @@ class BrowserController(context: Context) {
         onPageLoaded?.invoke(url, title)
     }
 
+    // ---------------------------------------------------------------- remembering tabs
+
+    private fun tabsState(): SavedTabs = SavedTabs(
+        tabs.map { SavedTab(if (it.isHome) "" else it.url, it.title) },
+        currentIndex,
+    )
+
+    /** Called by tabs when something worth remembering changed. */
+    internal fun tabsChanged() {
+        if (tabs.isNotEmpty()) tabStore.save(tabsState())
+    }
+
+    /** Saves the tabs immediately (the app is going to the background). */
+    fun persistTabs() {
+        if (tabs.isNotEmpty()) tabStore.saveNow(tabsState())
+    }
+
     // ---------------------------------------------------------------- tabs
 
     /** Opens a new tab (the start page, or the given address). False when too many tabs are open. */
     fun newTab(raw: String? = null): Boolean {
         if (tabs.size >= MAX_TABS) return false
         val tab = BrowserTab(nextTabId++, this, runtime)
-        extension?.let { tab.installBridge(it) }
         tabs.add(tab)
         selectTab(tabs.size - 1)
         if (raw != null) tab.load(normalize(raw))
@@ -119,6 +160,7 @@ class BrowserController(context: Context) {
         if (index !in tabs.indices) return
         currentIndex = index
         attach(tabs[index])
+        tabsChanged()
     }
 
     fun closeTab(index: Int) {
@@ -134,6 +176,7 @@ class BrowserController(context: Context) {
             selectTab(minOf(index, tabs.size - 1))
         } else {
             currentIndex = tabs.indexOf(cur)
+            tabsChanged()
         }
         victim.destroy()
     }
@@ -142,12 +185,12 @@ class BrowserController(context: Context) {
     fun closeAllTabs() {
         val old = tabs.toList()
         val fresh = BrowserTab(nextTabId++, this, runtime)
-        extension?.let { fresh.installBridge(it) }
         tabs.clear()
         tabs.add(fresh)
         currentIndex = 0
         attach(fresh)
         for (t in old) t.destroy()
+        tabsChanged()
     }
 
     // ---------------------------------------------------------------- navigation (current tab)
@@ -199,6 +242,7 @@ class BrowserController(context: Context) {
     }
 
     fun destroy() {
+        persistTabs()
         for (t in tabs) t.destroy()
     }
 
