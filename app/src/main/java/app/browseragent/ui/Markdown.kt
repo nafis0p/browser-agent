@@ -1,11 +1,14 @@
 package app.browseragent.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
@@ -22,13 +25,15 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 // A small Markdown renderer for AI replies: headings, bold, italic, strikethrough, inline code,
-// code blocks, bullet and numbered lists, quotes, rules, simple tables, links and bare URLs.
+// code blocks, bullet and numbered lists, quotes, rules, tables, links and bare URLs.
 
 private sealed class Md {
     class Para(val text: String) : Md()
@@ -36,8 +41,27 @@ private sealed class Md {
     class Item(val marker: String, val text: String, val indent: Int) : Md()
     class Code(val text: String) : Md()
     class Quote(val text: String) : Md()
+
+    /** align per column: 0 start, 1 center, 2 end */
+    class Table(val header: List<String>, val rows: List<List<String>>, val align: List<Int>) : Md()
+
     object Rule : Md()
 }
+
+private fun splitRow(row: String): List<String> =
+    row.trim().removePrefix("|").removeSuffix("|").split("|").map { it.trim() }
+
+/** A row such as  | --- | :---: | ---: |  that separates a table header from its body. */
+private fun isSeparatorRow(row: String): Boolean {
+    if (!row.contains('|') || !row.contains('-')) return false
+    val cells = splitRow(row)
+    return cells.isNotEmpty() && cells.all { c ->
+        c.isNotEmpty() && c.contains('-') && c.all { it == '-' || it == ':' || it == ' ' }
+    }
+}
+
+/** Length of a table cell without the Markdown marks, to size the columns. */
+private fun plainLength(s: String): Int = s.count { it != '*' && it != '`' && it != '~' }
 
 private fun parseBlocks(src: String): List<Md> {
     val out = ArrayList<Md>()
@@ -69,6 +93,21 @@ private fun parseBlocks(src: String): List<Md> {
                 out.add(Md.Code(code.toString().trimEnd()))
             }
             t.isEmpty() -> flush()
+            t.contains('|') && i + 1 < lines.size && isSeparatorRow(lines[i + 1]) -> {
+                flush()
+                val header = splitRow(t)
+                val align = splitRow(lines[i + 1]).map { c ->
+                    if (c.startsWith(":") && c.endsWith(":")) 1 else if (c.endsWith(":")) 2 else 0
+                }
+                i += 2
+                val rows = ArrayList<List<String>>()
+                while (i < lines.size && lines[i].isNotBlank() && lines[i].contains('|')) {
+                    rows.add(splitRow(lines[i]))
+                    i++
+                }
+                i-- // the loop below moves on to the first line after the table
+                out.add(Md.Table(header, rows, align))
+            }
             hashes in 1..6 && t.drop(hashes).startsWith(" ") -> {
                 flush()
                 out.add(Md.Head(hashes, t.drop(hashes).trim()))
@@ -90,20 +129,6 @@ private fun parseBlocks(src: String): List<Md> {
                 flush()
                 val indent = (line.length - line.trimStart().length) / 2
                 out.add(Md.Item(numbers + ".", t.drop(numbers.length + 2), indent.coerceAtMost(3)))
-            }
-            t.startsWith("|") -> {
-                flush()
-                val rows = ArrayList<String>()
-                while (i < lines.size && lines[i].trim().startsWith("|")) {
-                    val row = lines[i].trim()
-                    val isSeparator = row.replace("|", "").replace("-", "").replace(":", "").replace(" ", "").isEmpty()
-                    if (!isSeparator) {
-                        rows.add(row.trim('|').split("|").joinToString("  |  ") { it.trim() })
-                    }
-                    i++
-                }
-                i--
-                out.add(Md.Code(rows.joinToString("\n")))
             }
             else -> {
                 if (para.isNotEmpty()) para.append('\n')
@@ -189,6 +214,60 @@ private fun inlineMd(src: String, link: Color, codeBg: Color): AnnotatedString =
 }
 
 @Composable
+private fun TableLine(
+    cells: List<String>,
+    widths: List<Dp>,
+    align: List<Int>,
+    header: Boolean,
+    color: Color,
+    link: Color,
+    codeBg: Color,
+    border: Color,
+) {
+    Row(if (header) Modifier.background(color.copy(alpha = 0.08f)) else Modifier) {
+        for (j in widths.indices) {
+            Text(
+                inlineMd(cells.getOrNull(j).orEmpty(), link, codeBg),
+                color = color,
+                fontSize = 13.sp,
+                fontWeight = if (header) FontWeight.Bold else null,
+                textAlign = when (align.getOrNull(j)) {
+                    1 -> TextAlign.Center
+                    2 -> TextAlign.End
+                    else -> TextAlign.Start
+                },
+                modifier = Modifier
+                    .width(widths[j])
+                    .border(0.5.dp, border)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/** A real table: header row, bordered cells, Markdown inside the cells, scrolls sideways when wide. */
+@Composable
+private fun MdTable(t: Md.Table, color: Color, link: Color, codeBg: Color) {
+    val border = color.copy(alpha = 0.25f)
+    val all = listOf(t.header) + t.rows
+    val cols = all.maxOf { it.size }
+    val widths = (0 until cols).map { j ->
+        val longest = all.maxOf { r -> plainLength(r.getOrNull(j).orEmpty()) }
+        (longest * 8 + 24).coerceIn(80, 260).dp
+    }
+    Column(
+        Modifier
+            .horizontalScroll(rememberScrollState())
+            .border(1.dp, border, RoundedCornerShape(6.dp)),
+    ) {
+        TableLine(t.header, widths, t.align, true, color, link, codeBg, border)
+        for (r in t.rows) {
+            TableLine(r, widths, t.align, false, color, link, codeBg, border)
+        }
+    }
+}
+
+@Composable
 internal fun MarkdownText(text: String, color: Color, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val blocks = remember(text) { parseBlocks(text) }
@@ -221,6 +300,7 @@ internal fun MarkdownText(text: String, color: Color, modifier: Modifier = Modif
                         modifier = Modifier.horizontalScroll(rememberScrollState()).padding(8.dp),
                     )
                 }
+                is Md.Table -> MdTable(b, color, cs.primary, codeBg)
                 is Md.Quote -> Text("▎ " + b.text, color = color.copy(alpha = 0.75f), fontStyle = FontStyle.Italic)
                 Md.Rule -> HorizontalDivider(Modifier.fillMaxWidth())
             }

@@ -29,9 +29,12 @@ internal fun chatText(entries: List<LogEntry>): String =
         .filter { it.kind == Kind.USER || it.kind == Kind.ASSISTANT || it.kind == Kind.ERROR }
         .joinToString("\n\n") { (if (it.kind == Kind.USER) "You: " else "AI: ") + it.text }
 
-/** Messages are shown as bubbles; runs of tool/info lines are folded into one "steps" accordion. */
+/**
+ * Messages are shown as bubbles; runs of tool and info lines are folded into one steps accordion.
+ * index is the position of the message in the full list of entries (needed for editing).
+ */
 private sealed class ChatItem {
-    class Msg(val e: LogEntry) : ChatItem()
+    class Msg(val index: Int, val e: LogEntry) : ChatItem()
     class Steps(val start: Int, val lines: List<LogEntry>) : ChatItem()
 }
 
@@ -52,7 +55,7 @@ private fun groupEntries(entries: List<LogEntry>): List<ChatItem> {
                 out.add(ChatItem.Steps(currentStart, done))
                 current = null
             }
-            out.add(ChatItem.Msg(e))
+            out.add(ChatItem.Msg(idx, e))
         }
     }
     val tail = current
@@ -65,6 +68,9 @@ internal fun AiPanel(vm: AgentViewModel, modifier: Modifier, onClose: () -> Unit
     var input by remember { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
+    // Index of the message that is being edited (-1: none) and its text.
+    var editing by remember { mutableStateOf(-1) }
+    var editText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
     val ctx = LocalContext.current
@@ -78,7 +84,7 @@ internal fun AiPanel(vm: AgentViewModel, modifier: Modifier, onClose: () -> Unit
     }
 
     LaunchedEffect(vm.entries.size) {
-        if (groups.isNotEmpty()) listState.animateScrollToItem(groups.size - 1)
+        if (groups.isNotEmpty() && editing < 0) listState.animateScrollToItem(groups.size - 1)
     }
 
     Surface(modifier = modifier, tonalElevation = 2.dp) {
@@ -112,6 +118,7 @@ internal fun AiPanel(vm: AgentViewModel, modifier: Modifier, onClose: () -> Unit
                         }
                         MenuRow("New chat") {
                             moreOpen = false
+                            editing = -1
                             vm.newChat()
                         }
                         MenuRow(
@@ -142,12 +149,42 @@ internal fun AiPanel(vm: AgentViewModel, modifier: Modifier, onClose: () -> Unit
                     ) {
                         items(groups) { g ->
                             when (g) {
-                                is ChatItem.Msg -> Bubble(g.e) { copy(it) }
+                                is ChatItem.Msg -> Bubble(
+                                    e = g.e,
+                                    busy = vm.running,
+                                    editing = editing == g.index,
+                                    editText = editText,
+                                    onEditText = { editText = it },
+                                    onStartEdit = {
+                                        editing = g.index
+                                        editText = g.e.text
+                                    },
+                                    onCancel = { editing = -1 },
+                                    onSave = {
+                                        if (g.e.kind == Kind.USER) {
+                                            vm.editAndResend(g.index, editText)
+                                        } else {
+                                            vm.editText(g.index, editText)
+                                        }
+                                        editing = -1
+                                    },
+                                    onCopy = { copy(it) },
+                                )
                                 is ChatItem.Steps -> {
                                     val isLast = g === groups.last()
                                     val open = opened[g.start] ?: (isLast && vm.running)
                                     StepsGroup(g.lines, open) { opened[g.start] = !open }
                                 }
+                            }
+                        }
+                        item {
+                            if (!vm.running && vm.entries.any { it.kind == Kind.USER }) {
+                                TextButton(
+                                    onClick = {
+                                        editing = -1
+                                        vm.retryLast()
+                                    },
+                                ) { Text("\u21bb Retry") }
                             }
                         }
                     }
@@ -252,29 +289,88 @@ private fun EmptyChat(modifier: Modifier, onPick: (String) -> Unit) {
     }
 }
 
+/** The text box shown in place of a message while it is edited. */
 @Composable
-private fun Bubble(e: LogEntry, onCopy: (String) -> Unit) {
+private fun EditBox(
+    text: String,
+    onText: (String) -> Unit,
+    onCancel: () -> Unit,
+    onSave: () -> Unit,
+    saveLabel: String,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = onText,
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2,
+            maxLines = 10,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = onCancel) { Text("Cancel") }
+            Button(onClick = onSave) { Text(saveLabel) }
+        }
+    }
+}
+
+@Composable
+private fun Bubble(
+    e: LogEntry,
+    busy: Boolean,
+    editing: Boolean,
+    editText: String,
+    onEditText: (String) -> Unit,
+    onStartEdit: () -> Unit,
+    onCancel: () -> Unit,
+    onSave: () -> Unit,
+    onCopy: (String) -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     when (e.kind) {
-        Kind.USER -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = cs.primaryContainer,
-                modifier = Modifier.fillMaxWidth(0.85f),
-            ) {
-                SelectionContainer {
-                    Text(e.text, Modifier.padding(10.dp), color = cs.onPrimaryContainer)
+        Kind.USER -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+            if (editing) {
+                EditBox(editText, onEditText, onCancel, onSave, "Save & resend")
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = cs.primaryContainer,
+                    modifier = Modifier.fillMaxWidth(0.85f),
+                ) {
+                    SelectionContainer {
+                        Text(e.text, Modifier.padding(10.dp), color = cs.onPrimaryContainer)
+                    }
+                }
+                Row {
+                    TextButton(onClick = { onCopy(e.text) }) {
+                        Text("Copy", style = MaterialTheme.typography.labelSmall)
+                    }
+                    if (!busy) {
+                        TextButton(onClick = onStartEdit) {
+                            Text("Edit", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
                 }
             }
         }
         Kind.ASSISTANT -> Column(Modifier.fillMaxWidth(0.97f)) {
-            Surface(shape = RoundedCornerShape(16.dp), color = cs.surfaceVariant) {
-                SelectionContainer {
-                    MarkdownText(e.text, cs.onSurfaceVariant, Modifier.padding(10.dp))
+            if (editing) {
+                EditBox(editText, onEditText, onCancel, onSave, "Save")
+            } else {
+                Surface(shape = RoundedCornerShape(16.dp), color = cs.surfaceVariant) {
+                    SelectionContainer {
+                        MarkdownText(e.text, cs.onSurfaceVariant, Modifier.padding(10.dp))
+                    }
                 }
-            }
-            TextButton(onClick = { onCopy(e.text) }) {
-                Text("Copy", style = MaterialTheme.typography.labelSmall)
+                Row {
+                    TextButton(onClick = { onCopy(e.text) }) {
+                        Text("Copy", style = MaterialTheme.typography.labelSmall)
+                    }
+                    if (!busy) {
+                        TextButton(onClick = onStartEdit) {
+                            Text("Edit", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
             }
         }
         Kind.ERROR -> Column {

@@ -78,8 +78,8 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         private set
 
     // Appearance and browser settings (observable so the UI updates at once).
-    // Note: the functions that change them are named choose*/save* on purpose; a function
-    // called setAccent() would clash with the generated setter of the property.
+    // The functions that change them are named with the prefixes choose or save on purpose: a
+    // function called setAccent would clash with the generated setter of the property.
     var themeMode by mutableStateOf(store.themeMode)
         private set
 
@@ -142,13 +142,13 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         )
     }
 
-    /** A short transcript so a reopened chat continues with some memory of what was said. */
-    private fun transcript(c: Chat): String =
-        c.entries
-            .filter { it.kind == Kind.USER.name || it.kind == Kind.ASSISTANT.name }
+    /** A short transcript so a continued chat keeps some memory of what was said. */
+    private fun transcriptOf(list: List<LogEntry>): String =
+        list
+            .filter { it.kind == Kind.USER || it.kind == Kind.ASSISTANT }
             .takeLast(12)
             .joinToString("\n") {
-                (if (it.kind == Kind.USER.name) "User: " else "Assistant: ") + it.text.take(500)
+                (if (it.kind == Kind.USER) "User: " else "Assistant: ") + it.text.take(500)
             }
 
     private fun startFreshChat() {
@@ -159,7 +159,10 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         pendingContext = null
     }
 
-    fun send(goal: String) {
+    /**
+     * Sends a message to the AI. hiddenNote is added for the AI only (it is not shown in the chat).
+     */
+    fun send(goal: String, hiddenNote: String? = null) {
         val a = agent ?: return
         if (running) return
         if (!prefs.agentEnabled) {
@@ -171,7 +174,12 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         persistChat()
         val ctx = pendingContext
         pendingContext = null
-        val full = if (ctx == null) goal else "[Earlier in this conversation]\n" + ctx + "\n\n[New message]\n" + goal
+        val note = if (hiddenNote == null) "" else "\n\n" + hiddenNote
+        val full = if (ctx == null) {
+            goal + note
+        } else {
+            "[Earlier in this conversation]\n" + ctx + "\n\n[New message]\n" + goal + note
+        }
         val team = orchestrator
         job = viewModelScope.launch {
             try {
@@ -207,6 +215,50 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         agent?.pauseRun(false)
     }
 
+    // ---------------------------------------------------------------- retry and edit
+
+    /**
+     * Forgets everything from the message at this position on. The AI keeps a short memory of
+     * what came before it.
+     */
+    private fun rewindTo(index: Int) {
+        val before = entries.take(index)
+        pendingContext = transcriptOf(before).ifBlank { null }
+        agent?.reset()
+        while (entries.size > index) entries.removeAt(entries.size - 1)
+    }
+
+    /** Throws away the last answer and asks the AI again with the same message. */
+    fun retryLast() {
+        if (running) return
+        val u = entries.indexOfLast { it.kind == Kind.USER }
+        if (u < 0) return
+        val goal = entries[u].text
+        rewindTo(u)
+        send(
+            goal,
+            "[Retry] Your previous answer to this request was discarded. The page may already show part " +
+                "of what you did: check it first, then give a better answer.",
+        )
+    }
+
+    /** Replaces one of your messages and asks again; everything after it is discarded. */
+    fun editAndResend(index: Int, text: String) {
+        if (running || text.isBlank()) return
+        if (index !in entries.indices || entries[index].kind != Kind.USER) return
+        rewindTo(index)
+        send(text.trim())
+    }
+
+    /** Replaces the text of a message without asking again (used for the AI's own replies). */
+    fun editText(index: Int, text: String) {
+        if (running || index !in entries.indices) return
+        entries[index] = LogEntry(entries[index].kind, text)
+        pendingContext = transcriptOf(entries.toList()).ifBlank { null }
+        agent?.reset()
+        persistChat()
+    }
+
     fun newChat() {
         stop()
         persistChat()
@@ -224,7 +276,7 @@ class AgentViewModel(app: Application) : AndroidViewModel(app), AgentUi {
         chatId = c.id
         chatCreated = c.created
         agent?.reset()
-        pendingContext = transcript(c)
+        pendingContext = transcriptOf(entries.toList()).ifBlank { null }
     }
 
     fun deleteChat(id: String) {
