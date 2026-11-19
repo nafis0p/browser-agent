@@ -68,6 +68,10 @@ class BrowserTab internal constructor(
     var pageError by mutableStateOf<PageError?>(null)
         private set
 
+    /** How far the page is scrolled down, in pixels (pull to refresh only works at the top). */
+    @Volatile
+    internal var scrollOffset = 0
+
     private val json = Json { ignoreUnknownKeys = true }
     private val handler = Handler(Looper.getMainLooper())
 
@@ -155,6 +159,7 @@ class BrowserTab internal constructor(
                     pageError = null
                     lastStopFailed = false
                     userStopped = false
+                    scrollOffset = 0
                     this@BrowserTab.url = url
                     if (owner.current === this@BrowserTab) owner.noteUser("opened " + url.take(100))
                 }
@@ -194,6 +199,13 @@ class BrowserTab internal constructor(
                 }
             },
         )
+        session.setScrollDelegate(
+            object : GeckoSession.ScrollDelegate {
+                override fun onScrollChanged(session: GeckoSession, scrollX: Int, scrollY: Int) {
+                    scrollOffset = scrollY
+                }
+            },
+        )
 
         // A tab restored from the last run: it shows its old address and loads when it is opened.
         if (!restoredUrl.isNullOrBlank()) {
@@ -215,6 +227,11 @@ class BrowserTab internal constructor(
         session.open(runtime)
         if (ext != null) installBridge(ext)
         if (owner.extensionReady) onExtensionReady()
+    }
+
+    /** The tab that is shown is active, every other tab is inactive. */
+    internal fun setActive(active: Boolean) {
+        if (opened) session.setActive(active)
     }
 
     internal fun installBridge(ext: WebExtension) {

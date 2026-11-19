@@ -2,10 +2,12 @@ package app.browseragent.browser
 
 import android.content.Context
 import android.util.Log
+import android.view.ViewGroup
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import app.browseragent.data.SavedTab
 import app.browseragent.data.SavedTabs
 import app.browseragent.data.TabStore
@@ -27,8 +29,16 @@ private const val MAX_TABS = 12
  * the controller like a single browser. The open tabs are remembered between app starts.
  */
 class BrowserController(context: Context) {
-    /** The Firefox surface hosted by the UI. */
+    /** The Firefox surface. It sits inside the container below. */
     val webView: GeckoView = GeckoView(context)
+
+    /** What the UI hosts: the Firefox view wrapped in a pull-to-refresh layout. */
+    val container: SwipeRefreshLayout = SwipeRefreshLayout(context).apply {
+        addView(
+            webView,
+            ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
+    }
 
     private val runtime: GeckoRuntime = sharedRuntime(context)
     private val tabStore = TabStore(context)
@@ -45,6 +55,7 @@ class BrowserController(context: Context) {
     internal var extensionReady = false
     private var extension: WebExtension? = null
     private var attached = false
+    private var shown: BrowserTab? = null
     private var nextTabId = 1
 
     /** Search URL template; the placeholder is replaced by the search text. */
@@ -87,6 +98,13 @@ class BrowserController(context: Context) {
         }
         attach(tabs[currentIndex])
 
+        // Pull to refresh works only while the page is scrolled to the very top.
+        container.setOnChildScrollUpCallback { _, _ -> current.scrollOffset > 0 }
+        container.setOnRefreshListener {
+            current.reload()
+            container.postDelayed({ container.isRefreshing = false }, 700)
+        }
+
         // Pages are loaded only after the extension is installed, so its content script
         // is present from the first page on.
         runtime.webExtensionController
@@ -115,11 +133,18 @@ class BrowserController(context: Context) {
         }
     }
 
-    /** Shows the tab in the Firefox view (and wakes it up if it was asleep). */
+    /**
+     * Shows the tab in the Firefox view (and wakes it up if it was asleep). The tab that was shown
+     * before becomes inactive and the new one active, otherwise Firefox may keep painting the
+     * old tab.
+     */
     private fun attach(tab: BrowserTab) {
+        shown?.setActive(false)
         tab.ensureOpen(extension)
         if (attached) webView.releaseSession()
         webView.setSession(tab.session)
+        tab.setActive(true)
+        shown = tab
         attached = true
     }
 

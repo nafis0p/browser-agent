@@ -143,9 +143,13 @@ private fun BrowserPage(
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
+            // The Firefox view lives inside a pull-to-refresh layout (pull down at the top of a page).
             AndroidView(
-                factory = { browser.webView },
-                update = { v -> v.visibility = if (showWeb) View.VISIBLE else View.INVISIBLE },
+                factory = { browser.container },
+                update = { v ->
+                    v.visibility = if (showWeb) View.VISIBLE else View.INVISIBLE
+                    v.isEnabled = showWeb
+                },
                 modifier = Modifier.fillMaxSize(),
             )
             val err = browser.pageError
