@@ -24,6 +24,7 @@ import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebResponse
 
 internal const val NATIVE_APP = "browser"
 
@@ -147,8 +148,14 @@ class BrowserTab internal constructor(
     }
 
     init {
-        // Workaround recommended by the GeckoView quick start guide.
-        session.setContentDelegate(object : GeckoSession.ContentDelegate {})
+        // A response Firefox cannot show (a ZIP, an APK, an attachment) is a download.
+        session.setContentDelegate(
+            object : GeckoSession.ContentDelegate {
+                override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+                    owner.startDownload(response.uri, response.headers, response.body)
+                }
+            },
+        )
 
         session.setProgressDelegate(
             object : GeckoSession.ProgressDelegate {

@@ -3,6 +3,7 @@ package app.browseragent.browser
 import android.content.Context
 import android.util.Log
 import android.view.ViewGroup
+import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -16,6 +17,7 @@ import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
+import java.io.InputStream
 import java.net.URLEncoder
 
 private const val TAG = "BrowserController"
@@ -29,6 +31,8 @@ private const val MAX_TABS = 12
  * the controller like a single browser. The open tabs are remembered between app starts.
  */
 class BrowserController(context: Context) {
+    private val appContext: Context = context.applicationContext
+
     /** The Firefox surface. It sits inside the container below. */
     val webView: GeckoView = GeckoView(context)
 
@@ -39,6 +43,9 @@ class BrowserController(context: Context) {
             ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
         )
     }
+
+    /** Files the websites send as downloads. */
+    val downloads = Downloads(context)
 
     private val runtime: GeckoRuntime = sharedRuntime(context)
     private val tabStore = TabStore(context)
@@ -150,6 +157,12 @@ class BrowserController(context: Context) {
 
     internal fun recordPage(url: String, title: String) {
         onPageLoaded?.invoke(url, title)
+    }
+
+    /** A tab received a file that Firefox cannot show: save it as a download. */
+    internal fun startDownload(uri: String, headers: Map<String, String>, body: InputStream?) {
+        val name = downloads.start(uri, headers, body)
+        Toast.makeText(appContext, "Downloading " + name, Toast.LENGTH_SHORT).show()
     }
 
     // ---------------------------------------------------------------- remembering tabs
