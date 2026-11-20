@@ -8,24 +8,24 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
-/** A search engine added by the user. template contains %s where the search text goes. */
-@Serializable
-data class CustomEngine(val name: String, val template: String)
-
 /**
- * Interface and privacy preferences, observable by the UI. (Functions that change them are named
- * choose *save* so they never clash with the generated property setters.)
+ * A search engine added by the user: the search address and, optionally, an address that returns
+ * suggestions while typing. Both contain %s where the typed text goes.
  */
+@Serializable
+data class CustomEngine(val name: String, val template: String, val suggest: String = "")
+
+/** Interface and privacy preferences that the screens can observe. */
 class AppPrefs(context: Context) {
     private val sp = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
     private val engineSer = ListSerializer(CustomEngine.serializer())
 
-    /** True: the navigation bar (back, forward, AI, home, menu) is at the top. */
-    var navBarTop by mutableStateOf(sp.getBoolean("nav_top", false))
+    // No longer used by the screens (the navigation bar is always at the top), kept so that
+    // older saved settings still load.
+    var navBarTop by mutableStateOf(sp.getBoolean("nav_top", true))
         private set
 
-    /** True: the address bar is at the bottom. */
     var addressBarBottom by mutableStateOf(sp.getBoolean("addr_bottom", false))
         private set
 
@@ -38,6 +38,10 @@ class AppPrefs(context: Context) {
 
     /** False: what the user clicks, types and opens by hand is not reported to the AI. */
     var shareActivity by mutableStateOf(sp.getBoolean("share_activity", true))
+        private set
+
+    /** True: while typing in the address bar, the search engine is asked for suggestions. */
+    var suggestionsOn by mutableStateOf(sp.getBoolean("suggestions_on", true))
         private set
 
     fun chooseNavTop(top: Boolean) {
@@ -58,6 +62,11 @@ class AppPrefs(context: Context) {
     fun chooseShareActivity(on: Boolean) {
         shareActivity = on
         sp.edit().putBoolean("share_activity", on).apply()
+    }
+
+    fun chooseSuggestions(on: Boolean) {
+        suggestionsOn = on
+        sp.edit().putBoolean("suggestions_on", on).apply()
     }
 
     fun saveEngines(list: List<CustomEngine>) {

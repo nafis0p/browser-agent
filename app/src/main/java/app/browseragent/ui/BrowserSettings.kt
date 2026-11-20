@@ -26,7 +26,7 @@ private data class SRow(val id: String, val title: String, val url: String)
 
 /**
  * Turns the address of a search results page into a search template (with %s).
- * Example: https://example.com/search?q=test  ->  https://example.com/search?q=%s
+ * Example: https://example.com/search?q=test  becomes  https://example.com/search?q=%s
  * Returns null when the search word cannot be found.
  */
 internal fun toSearchTemplate(raw: String): String? {
@@ -67,6 +67,20 @@ internal fun toSearchTemplate(raw: String): String? {
     return null
 }
 
+/** A likely suggestions address for a few well-known sites, so the user does not have to find it. */
+internal fun guessSuggestUrl(raw: String): String? {
+    val host = hostOf(raw.trim()).lowercase()
+    return when {
+        host.endsWith("youtube.com") ->
+            "https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=%s"
+        host.endsWith("wikipedia.org") ->
+            "https://" + host + "/w/api.php?action=opensearch&search=%s&limit=8&namespace=0&format=json"
+        host.startsWith("amazon.") || host.contains(".amazon.") ->
+            "https://completion.amazon.com/search/complete?q=%s&search-alias=aps&mkt=1"
+        else -> null
+    }
+}
+
 @Composable
 private fun Choice(selected: Boolean, label: String, onClick: () -> Unit) {
     if (selected) {
@@ -87,41 +101,34 @@ private fun EngineRow(name: String, selected: Boolean, modifier: Modifier, onCli
     }
 }
 
-/** Layout, homepage, search engines, theme, accent colour, start-page shortcuts, data clearing. */
+/** Homepage, search engines and suggestions, theme, accent colour, shortcuts, data clearing. */
 @Composable
 fun BrowserSettingsScreen(vm: AgentViewModel, prefs: AppPrefs) {
     val cs = MaterialTheme.colorScheme
     var homepage by remember { mutableStateOf(vm.store.homepage) }
     var newName by remember { mutableStateOf("") }
     var newUrl by remember { mutableStateOf("") }
+    var newSuggest by remember { mutableStateOf("") }
     var rows by remember {
         mutableStateOf(vm.shortcuts.map { SRow(UUID.randomUUID().toString(), it.title, it.url) })
     }
     var note by remember { mutableStateOf("") }
 
+    // Fill in a likely suggestions address for well-known sites.
+    LaunchedEffect(newUrl) {
+        if (newSuggest.isBlank()) {
+            guessSuggestUrl(newUrl)?.let { newSuggest = it }
+        }
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // ---------------------------------------------------------------- layout
-        Text("Layout", style = MaterialTheme.typography.titleLarge)
-        Text("Navigation bar (back, forward, AI, home, menu)", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Choice(prefs.navBarTop, "Top") { prefs.chooseNavTop(true) }
-            Choice(!prefs.navBarTop, "Bottom") { prefs.chooseNavTop(false) }
-        }
-        Text("Address bar", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Choice(!prefs.addressBarBottom, "Top") { prefs.chooseAddressBottom(false) }
-            Choice(prefs.addressBarBottom, "Bottom") { prefs.chooseAddressBottom(true) }
-        }
-
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-
         // ---------------------------------------------------------------- homepage
         Text("Homepage", style = MaterialTheme.typography.titleLarge)
         Text(
-            "The page that opens when you start the app. Leave it empty to show the built-in start page.",
+            "The page that opens when you start the app and have no open tabs. Leave it empty to show the built-in start page.",
             style = MaterialTheme.typography.bodySmall,
         )
         OutlinedTextField(
@@ -134,7 +141,7 @@ fun BrowserSettingsScreen(vm: AgentViewModel, prefs: AppPrefs) {
         Button(
             onClick = {
                 vm.store.homepage = homepage.trim()
-                note = "Homepage saved. It applies the next time you open the app."
+                note = "Homepage saved."
             },
         ) { Text("Save homepage") }
 
@@ -150,7 +157,11 @@ fun BrowserSettingsScreen(vm: AgentViewModel, prefs: AppPrefs) {
         for (c in prefs.customEngines) {
             val selected = vm.searchEngine == "custom" && vm.store.customSearchUrl == c.template
             Row(verticalAlignment = Alignment.CenterVertically) {
-                EngineRow(c.name, selected, Modifier.weight(1f)) { vm.chooseSearch("custom", c.template) }
+                EngineRow(
+                    if (c.suggest.isBlank()) c.name + "  (no suggestions)" else c.name,
+                    selected,
+                    Modifier.weight(1f),
+                ) { vm.chooseSearch("custom", c.template) }
                 TextButton(
                     onClick = {
                         prefs.saveEngines(prefs.customEngines.filter { it != c })
@@ -158,6 +169,17 @@ fun BrowserSettingsScreen(vm: AgentViewModel, prefs: AppPrefs) {
                     },
                 ) { Text("Delete") }
             }
+        }
+
+        Text("Search suggestions", style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "While you type in the address bar, the search engine is asked for ideas. Off: nothing you type " +
+                    "is sent before you press Go.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(checked = prefs.suggestionsOn, onCheckedChange = { prefs.chooseSuggestions(it) })
         }
 
         Text("Add a search engine", style = MaterialTheme.typography.titleMedium)
@@ -194,15 +216,29 @@ fun BrowserSettingsScreen(vm: AgentViewModel, prefs: AppPrefs) {
                 color = if (preview != null) cs.primary else cs.error,
             )
         }
+        OutlinedTextField(
+            value = newSuggest,
+            onValueChange = { newSuggest = it },
+            singleLine = true,
+            label = { Text("Suggestions address (optional)") },
+            placeholder = { Text("https://example.com/suggest?q=%s") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "The address that returns ideas while you type, with %s for the typed text. It must answer in " +
+                "the common OpenSearch format. Leave it empty for no suggestions.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         Button(
             onClick = {
                 val t = toSearchTemplate(newUrl)
                 if (t != null) {
                     val name = newName.trim().ifBlank { hostOf(t) }
-                    prefs.saveEngines(prefs.customEngines + CustomEngine(name, t))
+                    prefs.saveEngines(prefs.customEngines + CustomEngine(name, t, newSuggest.trim()))
                     vm.chooseSearch("custom", t)
                     newName = ""
                     newUrl = ""
+                    newSuggest = ""
                     note = "Added '" + name + "' and selected it."
                 }
             },
@@ -243,7 +279,7 @@ fun BrowserSettingsScreen(vm: AgentViewModel, prefs: AppPrefs) {
         // ---------------------------------------------------------------- shortcuts
         Text("Start-page shortcuts", style = MaterialTheme.typography.titleLarge)
         Text(
-            "You can also pin the open page from the \u22ee menu in the browser.",
+            "You can also pin the open page from the menu in the browser.",
             style = MaterialTheme.typography.bodySmall,
         )
         for (r in rows) {

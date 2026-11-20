@@ -40,6 +40,7 @@ internal fun StartPage(
     val cs = MaterialTheme.colorScheme
     var query by remember { mutableStateOf("") }
     val recent = vm.history.entries.distinctBy { it.url }.take(5)
+    val suggestions = suggestionList(vm, query, true)
 
     Column(
         Modifier.fillMaxSize().background(cs.background).verticalScroll(rememberScrollState()).padding(20.dp),
@@ -58,6 +59,15 @@ internal fun StartPage(
             keyboardActions = KeyboardActions(onGo = { if (query.isNotBlank()) browser.load(query) }),
             modifier = Modifier.fillMaxWidth(),
         )
+        if (suggestions.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                tonalElevation = 3.dp,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            ) {
+                SuggestionRows(suggestions) { value -> browser.load(value) }
+            }
+        }
         Spacer(Modifier.height(20.dp))
 
         for (row in vm.shortcuts.chunked(3)) {
