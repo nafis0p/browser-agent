@@ -24,13 +24,14 @@ import app.browseragent.data.AppPrefs
 import java.text.DateFormat
 import java.util.Date
 
-internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS }
+internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS, DOWNLOADS }
 
 private fun titleOf(p: Page): String = when (p) {
     Page.HISTORY -> "History"
     Page.CHATS -> "AI chats"
     Page.SETTINGS -> "Settings"
     Page.TABS -> "Tabs"
+    Page.DOWNLOADS -> "Downloads"
     Page.BROWSER -> ""
 }
 
@@ -72,6 +73,7 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
                                     aiOpen = true
                                 }
                                 Page.TABS -> TabsScreen(browser) { page = Page.BROWSER }
+                                Page.DOWNLOADS -> DownloadsScreen(browser)
                                 else -> {}
                             }
                         }

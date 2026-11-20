@@ -162,7 +162,11 @@ internal fun SideMenu(
                         onClose()
                         go(Page.HISTORY)
                     }
-                    SideRow("Downloads", enabled = false, hint = "Soon")
+                    val running = browser.downloads.runningCount()
+                    SideRow(if (running > 0) "Downloads (" + running + " running)" else "Downloads") {
+                        onClose()
+                        go(Page.DOWNLOADS)
+                    }
                     SideRow("Bookmarks", enabled = false, hint = "Soon")
                     HorizontalDivider()
 
