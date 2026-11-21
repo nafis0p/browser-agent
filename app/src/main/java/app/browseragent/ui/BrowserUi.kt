@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,7 +53,6 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
         BrowserPage(
             vm = vm,
             browser = browser,
-            prefs = prefs,
             visible = page == Page.BROWSER,
             aiOpen = aiOpen,
             onToggleAi = { aiOpen = !aiOpen },
@@ -122,27 +122,27 @@ private fun SubBar(title: String, onBack: () -> Unit) {
 private fun BrowserPage(
     vm: AgentViewModel,
     browser: BrowserController,
-    prefs: AppPrefs,
     visible: Boolean,
     aiOpen: Boolean,
     onToggleAi: () -> Unit,
     go: (Page) -> Unit,
     onMenu: () -> Unit,
 ) {
+    val focus = LocalFocusManager.current
     val aiOn = vm.prefs.agentEnabled
     val home = browser.isHome
     val showWeb = visible && !home && browser.pageError == null
+    // What is typed in the address bar right now (for the suggestion list).
+    var addrEditing by remember { mutableStateOf(false) }
+    var addrText by remember { mutableStateOf("") }
 
     Column(Modifier.fillMaxSize()) {
-        if (prefs.navBarTop) {
-            // One row: back, forward, address bar, AI, menu.
-            TopBar(vm, browser, aiOpen && aiOn, onToggleAi, onMenu)
-            ProgressLine(browser)
-        } else if (!prefs.addressBarBottom && !home) {
-            // The start page has its own search box, so no separate address bar there.
-            AddressBar(browser, Modifier.fillMaxWidth())
-            ProgressLine(browser)
+        // The only bar: home, address bar, AI, tabs, menu. The start page has its own search box.
+        TopBar(vm, browser, aiOpen && aiOn, onToggleAi, go, onMenu) { editing, text ->
+            addrEditing = editing
+            addrText = text
         }
+        ProgressLine(browser)
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // The Firefox view lives inside a pull-to-refresh layout (pull down at the top of a page).
@@ -165,16 +165,28 @@ private fun BrowserPage(
             } else if (err != null) {
                 ErrorPage(browser, err)
             }
+
+            // Suggestions: pages from the history and ideas from the search engine.
+            if (addrEditing) {
+                val suggestions = suggestionList(vm, addrText, true)
+                if (suggestions.isNotEmpty()) {
+                    Surface(
+                        Modifier.fillMaxWidth().align(Alignment.TopStart),
+                        tonalElevation = 6.dp,
+                        shadowElevation = 6.dp,
+                    ) {
+                        SuggestionRows(suggestions) { value ->
+                            browser.load(value)
+                            focus.clearFocus()
+                        }
+                    }
+                }
+            }
         }
 
         if (aiOpen && aiOn) {
             AiPanel(vm, Modifier.weight(1f).fillMaxWidth(), onClose = onToggleAi)
         }
-        if (!prefs.navBarTop && prefs.addressBarBottom && !home) {
-            ProgressLine(browser)
-            AddressBar(browser, Modifier.fillMaxWidth())
-        }
-        if (!prefs.navBarTop) NavBar(vm, browser, aiOpen && aiOn, onToggleAi, go, onMenu)
     }
 }
 

@@ -49,9 +49,16 @@ internal fun ProgressLine(browser: BrowserController) {
     }
 }
 
-/** The rounded address field. The caller decides how wide it is through the modifier. */
+/**
+ * The rounded address field. The caller decides how wide it is through the modifier.
+ * onEdit is told when the field starts or stops being edited and what is typed (for suggestions).
+ */
 @Composable
-internal fun AddressBar(browser: BrowserController, modifier: Modifier = Modifier) {
+internal fun AddressBar(
+    browser: BrowserController,
+    modifier: Modifier = Modifier,
+    onEdit: (Boolean, String) -> Unit = { _, _ -> },
+) {
     val focus = LocalFocusManager.current
     val cs = MaterialTheme.colorScheme
     var editing by remember { mutableStateOf(false) }
@@ -61,16 +68,19 @@ internal fun AddressBar(browser: BrowserController, modifier: Modifier = Modifie
     Surface(
         shape = RoundedCornerShape(26.dp),
         color = cs.surfaceVariant,
-        modifier = modifier.padding(horizontal = 6.dp, vertical = 6.dp).height(48.dp),
+        modifier = modifier.padding(horizontal = 4.dp, vertical = 6.dp).height(46.dp),
     ) {
-        Row(Modifier.padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 12.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             if (!browser.isHome && browser.url.startsWith("https")) {
-                Text("\ud83d\udd12", fontSize = 13.sp)
-                Spacer(Modifier.width(8.dp))
+                Text("\ud83d\udd12", fontSize = 12.sp)
+                Spacer(Modifier.width(6.dp))
             }
             BasicTextField(
                 value = shown,
-                onValueChange = { field = it },
+                onValueChange = {
+                    field = it
+                    onEdit(true, it.text)
+                },
                 singleLine = true,
                 textStyle = TextStyle(color = cs.onSurface, fontSize = 16.sp),
                 cursorBrush = SolidColor(cs.primary),
@@ -94,8 +104,10 @@ internal fun AddressBar(browser: BrowserController, modifier: Modifier = Modifie
                         editing = true
                         val t = if (browser.isHome) "" else browser.url
                         field = TextFieldValue(t, TextRange(0, t.length))
+                        onEdit(true, "")
                     } else {
                         editing = false
+                        onEdit(false, "")
                     }
                 },
             )
@@ -106,7 +118,7 @@ internal fun AddressBar(browser: BrowserController, modifier: Modifier = Modifie
                     modifier = Modifier
                         .clip(CircleShape)
                         .clickable { if (browser.isLoading) browser.stopLoading() else browser.reload() }
-                        .padding(10.dp),
+                        .padding(8.dp),
                 )
             }
         }
@@ -124,17 +136,17 @@ private fun NavButton(label: String, enabled: Boolean, size: Dp = 46.dp, onClick
 }
 
 @Composable
-private fun TabButton(count: Int, onClick: () -> Unit) {
+private fun TabButton(count: Int, size: Dp, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Box(
-        Modifier.size(46.dp).clip(CircleShape).clickable(onClick = onClick),
+        Modifier.size(size).clip(CircleShape).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier.size(24.dp).border(2.dp, cs.onSurface, RoundedCornerShape(6.dp)),
+            Modifier.size(22.dp).border(2.dp, cs.onSurface, RoundedCornerShape(6.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Text(count.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(count.toString(), fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -148,12 +160,12 @@ private fun AiButton(open: Boolean, busy: Boolean, size: Dp, onClick: () -> Unit
     ) {
         if (busy) {
             CircularProgressIndicator(
-                modifier = Modifier.size(size - 12.dp),
+                modifier = Modifier.size(size - 10.dp),
                 color = cs.onPrimary,
                 strokeWidth = 2.dp,
             )
         }
-        Text(if (open) "\u2715" else "AI", color = cs.onPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Text(if (open) "\u2715" else "AI", color = cs.onPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
     }
 }
 
@@ -162,54 +174,33 @@ internal fun MenuRow(label: String, onClick: () -> Unit) {
     DropdownMenuItem(text = { Text(label) }, onClick = onClick)
 }
 
-/** Bottom bar: back, forward, AI, start page, tabs, menu. The menu opens the side panel. */
-@Composable
-internal fun NavBar(
-    vm: AgentViewModel,
-    browser: BrowserController,
-    aiOpen: Boolean,
-    onToggleAi: () -> Unit,
-    go: (Page) -> Unit,
-    onMenu: () -> Unit,
-) {
-    Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            NavButton("\u2190", browser.canGoBack()) { browser.back() }
-            NavButton("\u2192", browser.canForward && !browser.isHome) { browser.forward() }
-            if (vm.prefs.agentEnabled) AiButton(aiOpen, vm.running, 54.dp, onToggleAi)
-            NavButton("\u2302", !browser.isHome) { browser.showHome() }
-            TabButton(browser.tabs.size) { go(Page.TABS) }
-            NavButton("\u22ee", true) { onMenu() }
-        }
-    }
-}
-
-/** Top bar when the navigation bar is at the top: back, forward, address, AI, menu in one row. */
+/**
+ * The one bar of the browser, at the top: home, address bar, AI button, tabs, menu.
+ * The menu opens the side panel (which also has back, forward and reload).
+ */
 @Composable
 internal fun TopBar(
     vm: AgentViewModel,
     browser: BrowserController,
     aiOpen: Boolean,
     onToggleAi: () -> Unit,
+    go: (Page) -> Unit,
     onMenu: () -> Unit,
+    onAddress: (Boolean, String) -> Unit,
 ) {
     Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            NavButton("\u2190", browser.canGoBack(), 38.dp) { browser.back() }
-            NavButton("\u2192", browser.canForward && !browser.isHome, 38.dp) { browser.forward() }
+            NavButton("\u2302", !browser.isHome, 38.dp) { browser.showHome() }
             if (browser.isHome) {
                 Spacer(Modifier.weight(1f))
             } else {
-                AddressBar(browser, Modifier.weight(1f))
+                AddressBar(browser, Modifier.weight(1f), onAddress)
             }
             if (vm.prefs.agentEnabled) AiButton(aiOpen, vm.running, 42.dp, onToggleAi)
+            TabButton(browser.tabs.size, 38.dp) { go(Page.TABS) }
             NavButton("\u22ee", true, 38.dp) { onMenu() }
         }
     }

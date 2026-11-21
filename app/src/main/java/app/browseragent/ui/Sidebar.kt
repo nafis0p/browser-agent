@@ -77,6 +77,36 @@ private fun SideRow(
     }
 }
 
+/** A menu entry that opens and closes a group of entries below it. */
+@Composable
+private fun SideAccordion(
+    title: String,
+    hint: String = "",
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { open = !open }
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, Modifier.weight(1f))
+            if (hint.isNotEmpty()) {
+                Text(hint, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant.copy(alpha = 0.7f))
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(if (open) "\u25be" else "\u25b8", color = cs.onSurfaceVariant)
+        }
+        if (open) {
+            Column(Modifier.padding(start = 16.dp)) { content() }
+        }
+    }
+}
+
 /**
  * The browser menu: a panel that slides in from the right (about 78 percent of the screen, at most
  * 340 dp wide). Entries that are not built yet are shown greyed out, so the layout is final.
@@ -212,6 +242,14 @@ internal fun SideMenu(
                         }
                         HorizontalDivider()
                     }
+
+                    // Add-ons for Firefox on Android. The entries are visible but not built yet.
+                    SideAccordion("Extensions", hint = "Soon") {
+                        SideRow("Installed extensions", enabled = false, hint = "Soon")
+                        SideRow("Get extensions", enabled = false, hint = "Soon")
+                        SideRow("Extension settings", enabled = false, hint = "Soon")
+                    }
+                    HorizontalDivider()
 
                     SideRow("Settings") {
                         onClose()
