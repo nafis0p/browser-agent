@@ -25,10 +25,16 @@ private const val EXT_LOCATION = "resource://android/assets/agent/"
 private const val EXT_ID = "agent@browseragent.app"
 private const val MAX_TABS = 12
 
+/** What the user long-pressed on a page: a link, an image, or both (an image inside a link). */
+class ContextInfo(val linkUri: String?, val imageUri: String?, val label: String)
+
 /**
  * Manages the browser tabs. One GeckoView shows the current tab; every tab has its own session.
  * The properties and functions below act on the current tab, so the rest of the app can treat
  * the controller like a single browser. The open tabs are remembered between app starts.
+ *
+ * While the AI works it is pinned to one tab (the one that was shown when it started, or the
+ * one it opened or switched to itself). If the user leaves that tab, the AI waits for the user.
  */
 class BrowserController(context: Context) {
     private val appContext: Context = context.applicationContext
@@ -59,11 +65,22 @@ class BrowserController(context: Context) {
     var restoredTabs: Boolean = false
         private set
 
+    /** Set while the user long-presses a link or an image (the screen shows a menu for it). */
+    var contextMenu by mutableStateOf<ContextInfo?>(null)
+        private set
+
+    /** The id of the tab the AI works in right now (null when the AI is not running). */
+    var agentTabId by mutableStateOf<Int?>(null)
+        private set
+
     internal var extensionReady = false
     private var extension: WebExtension? = null
     private var attached = false
     private var shown: BrowserTab? = null
     private var nextTabId = 1
+
+    /** The tab of the last snapshot the AI took. Ids from a snapshot only work in that tab. */
+    private var lastSnapTab = -1
 
     /** Search URL template; the placeholder is replaced by the search text. */
     var searchTemplate: String = "https://duckduckgo.com/?q=%s"
@@ -88,6 +105,14 @@ class BrowserController(context: Context) {
     val desktopMode: Boolean get() = current.desktopMode
     val isHome: Boolean get() = current.isHome
     val pageError: PageError? get() = current.pageError
+
+    /** True while the AI works in a tab that the user is not looking at. */
+    val agentAway: Boolean
+        get() {
+            val id = agentTabId ?: return false
+            val i = tabs.indexOfFirst { it.id == id }
+            return i >= 0 && i != currentIndex
+        }
 
     init {
         // Bring back the tabs of the last run. They stay asleep until they are shown.
@@ -165,6 +190,16 @@ class BrowserController(context: Context) {
         Toast.makeText(appContext, "Downloading " + name, Toast.LENGTH_SHORT).show()
     }
 
+    // ---------------------------------------------------------------- long press menu
+
+    internal fun showContextMenu(info: ContextInfo) {
+        contextMenu = info
+    }
+
+    fun dismissContextMenu() {
+        contextMenu = null
+    }
+
     // ---------------------------------------------------------------- remembering tabs
 
     private fun tabsState(): SavedTabs = SavedTabs(
@@ -184,21 +219,43 @@ class BrowserController(context: Context) {
 
     // ---------------------------------------------------------------- tabs
 
+    private fun tabLabel(t: BrowserTab): String =
+        t.title.ifBlank { if (t.isHome) "Start page" else t.url }.take(40)
+
+    /** Shows a tab without telling the AI about it. */
+    private fun showTab(index: Int) {
+        currentIndex = index
+        attach(tabs[index])
+        tabsChanged()
+    }
+
     /** Opens a new tab (the start page, or the given address). False when too many tabs are open. */
     fun newTab(raw: String? = null): Boolean {
         if (tabs.size >= MAX_TABS) return false
         val tab = BrowserTab(nextTabId++, this, runtime)
         tabs.add(tab)
-        selectTab(tabs.size - 1)
+        showTab(tabs.size - 1)
         if (raw != null) tab.load(normalize(raw))
+        noteUser("opened a new tab")
+        return true
+    }
+
+    /** Opens an address in a new tab behind the current one (like a long press on a link). */
+    fun openInBackground(raw: String): Boolean {
+        if (tabs.size >= MAX_TABS) return false
+        val tab = BrowserTab(nextTabId++, this, runtime)
+        tabs.add(tab)
+        tab.ensureOpen(extension)
+        tab.load(normalize(raw))
+        tabsChanged()
         return true
     }
 
     fun selectTab(index: Int) {
         if (index !in tabs.indices) return
-        currentIndex = index
-        attach(tabs[index])
-        tabsChanged()
+        val changed = index != currentIndex
+        showTab(index)
+        if (changed) noteUser("switched to tab " + (index + 1) + " of " + tabs.size + " ('" + tabLabel(tabs[index]) + "')")
     }
 
     fun closeTab(index: Int) {
@@ -211,12 +268,13 @@ class BrowserController(context: Context) {
         val cur = tabs[currentIndex.coerceIn(0, tabs.lastIndex)]
         tabs.removeAt(index)
         if (victim === cur) {
-            selectTab(minOf(index, tabs.size - 1))
+            showTab(minOf(index, tabs.size - 1))
         } else {
             currentIndex = tabs.indexOf(cur)
             tabsChanged()
         }
         victim.destroy()
+        noteUser("closed a tab")
     }
 
     /** Closes every tab and leaves one fresh tab with the start page. */
@@ -229,6 +287,7 @@ class BrowserController(context: Context) {
         attach(fresh)
         for (t in old) t.destroy()
         tabsChanged()
+        noteUser("closed all tabs")
     }
 
     // ---------------------------------------------------------------- navigation (current tab)
@@ -311,17 +370,58 @@ class BrowserController(context: Context) {
         }
     }
 
-    // ---------------------------------------------------------------- agent API (current tab)
+    // ---------------------------------------------------------------- the AI's tab
+
+    /** The AI starts working: it is pinned to the tab that is shown now. */
+    fun beginAgent() {
+        agentTabId = current.id
+        lastSnapTab = -1
+    }
+
+    /** The AI is done. */
+    fun endAgent() {
+        agentTabId = null
+    }
+
+    /** The tab the AI works in. When that tab was closed, the AI continues in the shown tab. */
+    private fun agentTab(): BrowserTab {
+        val id = agentTabId
+        if (id != null) {
+            val t = tabs.firstOrNull { it.id == id }
+            if (t != null) return t
+            agentTabId = current.id
+        }
+        return current
+    }
+
+    fun agentTabVisible(): Boolean = !agentAway
+
+    /** Brings the tab of the AI to the front. */
+    fun showAgentTab() {
+        val id = agentTabId ?: return
+        val i = tabs.indexOfFirst { it.id == id }
+        if (i >= 0) showTab(i)
+    }
+
+    // ---------------------------------------------------------------- agent API
+
+    private fun footer(t: BrowserTab): String =
+        "Tab: t" + t.id + " (" + (tabs.indexOf(t) + 1) + " of " + tabs.size + ")\n"
+
+    private suspend fun snapshotOf(t: BrowserTab): String {
+        lastSnapTab = t.id
+        return t.snapshot() + footer(t)
+    }
 
     suspend fun navigate(raw: String): String = asAgent {
-        val t = current
+        val t = agentTab()
         withContext(Dispatchers.Main) { t.load(normalize(raw)) }
         t.settle()
-        t.snapshot()
+        snapshotOf(t)
     }
 
     suspend fun goBack(): String = asAgent {
-        val t = current
+        val t = agentTab()
         val ok = withContext(Dispatchers.Main) {
             if (t.canBack) {
                 t.goBackNow()
@@ -330,15 +430,75 @@ class BrowserController(context: Context) {
                 false
             }
         }
-        if (!ok) return@asAgent "Cannot go back: no history."
+        if (!ok) return@asAgent "Cannot go back: no history in this tab.\n" + footer(t)
         t.settle()
-        t.snapshot()
+        snapshotOf(t)
     }
 
-    suspend fun snapshot(): String = current.snapshot()
+    suspend fun snapshot(): String = snapshotOf(agentTab())
 
     suspend fun act(op: String, id: String, arg: String): String = asAgent {
-        current.act(op, id, arg)
+        val t = agentTab()
+        if (lastSnapTab != t.id) {
+            return@asAgent "ERROR: the ids you have belong to another tab. Call snapshot first.\n" + footer(t)
+        }
+        val out = t.act(op, id, arg)
+        lastSnapTab = t.id
+        out + footer(t)
+    }
+
+    // ---- tab tools for the AI
+
+    fun listTabs(): String {
+        val sb = StringBuilder("Open tabs (" + tabs.size + "):\n")
+        for ((i, t) in tabs.withIndex()) {
+            val name = t.title.ifBlank { if (t.isHome) "Start page" else t.url }.take(60)
+            val where = if (t.isHome) "start page" else t.url.take(80)
+            sb.append("[t").append(t.id).append("] ").append(name).append(" - ").append(where)
+            if (i == currentIndex) sb.append("  (shown)")
+            if (t.id == agentTabId) sb.append("  (your tab)")
+            sb.append('\n')
+        }
+        return sb.toString()
+    }
+
+    private fun parseTabId(text: String): Int? =
+        text.trim().removePrefix("t").removePrefix("T").toIntOrNull()
+
+    suspend fun openTabForAgent(raw: String?): String = asAgent {
+        val address = raw?.takeIf { it.isNotBlank() }
+        val opened = withContext(Dispatchers.Main) { newTab(address) }
+        if (!opened) {
+            return@asAgent "ERROR: too many tabs are open (the limit is 12). Close one with close_tab first."
+        }
+        val t = current
+        agentTabId = t.id
+        if (address != null) t.settle()
+        snapshotOf(t)
+    }
+
+    suspend fun switchTabForAgent(idText: String): String = asAgent {
+        val id = parseTabId(idText)
+            ?: return@asAgent "ERROR: use a tab id like t3.\n" + listTabs()
+        val i = tabs.indexOfFirst { it.id == id }
+        if (i < 0) return@asAgent "ERROR: there is no tab t" + id + ".\n" + listTabs()
+        withContext(Dispatchers.Main) { showTab(i) }
+        agentTabId = id
+        val t = tabs[i]
+        t.settle()
+        snapshotOf(t)
+    }
+
+    suspend fun closeTabForAgent(idText: String): String = asAgent {
+        val id = parseTabId(idText)
+            ?: return@asAgent "ERROR: use a tab id like t3.\n" + listTabs()
+        val i = tabs.indexOfFirst { it.id == id }
+        if (i < 0) return@asAgent "ERROR: there is no tab t" + id + ".\n" + listTabs()
+        withContext(Dispatchers.Main) { closeTab(i) }
+        if (agentTabId == id || tabs.none { it.id == agentTabId }) agentTabId = current.id
+        lastSnapTab = -1
+        "Closed tab t" + id + ".\n" + listTabs() +
+            "You are now in tab t" + current.id + ". Call snapshot to see it.\n"
     }
 
     companion object {

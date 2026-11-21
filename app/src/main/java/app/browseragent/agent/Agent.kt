@@ -189,10 +189,16 @@ class Agent(
         paused = value
     }
 
+    /** Waits while the run is paused, or while the user is looking at another tab than the AI's. */
     private suspend fun waitIfPaused() {
-        if (!paused) return
-        ui.log(Kind.INFO, "Paused. Tap Resume to continue.")
-        while (paused) delay(150)
+        if (paused) {
+            ui.log(Kind.INFO, "Paused. Tap Resume to continue.")
+            while (paused) delay(150)
+        }
+        if (!browser.agentTabVisible()) {
+            ui.log(Kind.INFO, "You left the tab the AI works in. It continues when you return to that tab.")
+            while (!browser.agentTabVisible()) delay(250)
+        }
     }
 
     /** What the user did by hand. Always cleared, but only passed on when sharing is switched on. */
@@ -263,6 +269,14 @@ class Agent(
             sb.append("Personal data placeholders you may use as fill text (the app inserts the real value, you never see it): ")
             sb.append(names.joinToString(", ") { PH + it })
         }
+        sb.append(
+            "\n\nTabs: every snapshot ends with a line such as Tab: t3 (2 of 4). You work in one tab at a time, " +
+                "the one shown in that line. Use list_tabs to see all tabs, open_tab to open a new one (it keeps the " +
+                "user's page untouched), switch_tab to move to another one and close_tab to close one. navigate " +
+                "changes the page of the current tab. Element ids only work in the tab of the snapshot they come " +
+                "from: after switching tabs, read the new tab before acting. Do not close tabs you did not open " +
+                "unless the user asks. The user may open, switch and close tabs too; this is reported to you.",
+        )
         if (ledger.isNotEmpty()) {
             sb.append(
                 "\n\nActions you already completed in this conversation (oldest first). " +
@@ -281,7 +295,17 @@ class Agent(
                 seen.joinToString("; ") + ". The page state already includes it. Do not redo it.]"
         }
 
+    /** Runs the agent. While it runs it is pinned to one tab of the browser. */
     suspend fun run(goalRaw: String) {
+        browser.beginAgent()
+        try {
+            runLoop(goalRaw)
+        } finally {
+            browser.endAgent()
+        }
+    }
+
+    private suspend fun runLoop(goalRaw: String) {
         // Every turn starts from the real, current page and (if allowed) from what the user did by hand.
         val freshRaw = try {
             if (browser.url == "about:blank") "(blank page)" else browser.snapshot()
@@ -367,14 +391,18 @@ class Agent(
     }
 
     private fun browserTools(): List<JsonObject> = listOf(
-        tool("navigate", "Open a URL (or search text) in the browser and return a page snapshot.", "url" to "URL or search query"),
-        tool("snapshot", "Read the current page again (page text plus interactive elements with ids)."),
+        tool("navigate", "Open a URL (or search text) in the CURRENT tab and return a page snapshot.", "url" to "URL or search query"),
+        tool("snapshot", "Read the current tab again (page text plus interactive elements with ids)."),
         tool("click", "Click an element by id from the latest snapshot.", "id" to "Element id such as e12"),
         tool("fill", "Type text into an input, textarea or editable element (replaces existing text). For personal data pass a placeholder such as the email or password one.", "id" to "Element id", "text" to "Text to enter, or a personal-data placeholder"),
         tool("select_option", "Choose an option in a select dropdown.", "id" to "Element id of the select", "option" to "Option text or value"),
         tool("press_enter", "Press Enter in an element (submits forms and search boxes).", "id" to "Element id"),
         tool("scroll", "Scroll the page.", "direction" to "up, down, top or bottom"),
-        tool("go_back", "Go back to the previous page."),
+        tool("go_back", "Go back to the previous page in the current tab."),
+        tool("list_tabs", "List the open browser tabs with their ids."),
+        tool("open_tab", "Open a new tab and switch to it. Returns a snapshot of it.", "url" to "Address or search text; leave empty for the start page"),
+        tool("switch_tab", "Switch to another tab. Returns a snapshot of it.", "tab" to "Tab id such as t3"),
+        tool("close_tab", "Close a tab.", "tab" to "Tab id such as t3"),
         tool("wait", "Wait for the page to update, then return a fresh snapshot.", "seconds" to "1 to 10"),
         tool("confirm", "Ask the user to approve a sensitive action BEFORE doing it. Returns approval or denial.", "message" to "What you are about to do, in plain words"),
     )
@@ -398,6 +426,24 @@ class Agent(
                     val t = browser.goBack()
                     addLedger("went back (now at " + urlOf(t) + ")")
                     Pair(t, true)
+                }
+                "list_tabs" -> Pair(browser.listTabs(), false)
+                "open_tab" -> {
+                    val t = browser.openTabForAgent(s("url"))
+                    userTouched = false
+                    addLedger("opened a new tab " + s("url").take(100) + " (now at " + urlOf(t) + ")")
+                    Pair(t, !t.startsWith("ERROR"))
+                }
+                "switch_tab" -> {
+                    val t = browser.switchTabForAgent(s("tab"))
+                    userTouched = false
+                    addLedger("switched to tab " + s("tab"))
+                    Pair(t, !t.startsWith("ERROR"))
+                }
+                "close_tab" -> {
+                    val t = browser.closeTabForAgent(s("tab"))
+                    addLedger("closed tab " + s("tab"))
+                    Pair(t, false)
                 }
                 "wait" -> {
                     val secs = (s("seconds").toDoubleOrNull() ?: 2.0).coerceIn(0.0, 10.0)
