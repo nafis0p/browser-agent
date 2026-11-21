@@ -37,7 +37,8 @@ private fun JsonObject.str(k: String): String = (this[k] as? JsonPrimitive)?.con
  * One browser tab: its own Firefox session and its own connection to the page scripts.
  * The BrowserController keeps the list of tabs and decides which one is shown.
  *
- * A tab restored from the last run stays asleep (no Firefox session yet) until it is shown.
+ * A tab that is asleep has no Firefox session running (it was restored from the last run, or
+ * it was not used for a while) and keeps only its address. It wakes up when it is shown.
  */
 class BrowserTab internal constructor(
     val id: Int,
@@ -46,7 +47,9 @@ class BrowserTab internal constructor(
     restoredUrl: String? = null,
     restoredTitle: String = "",
 ) {
-    val session = GeckoSession()
+    /** The Firefox session. A tab that went to sleep gets a fresh one for its next wake-up. */
+    var session = GeckoSession()
+        private set
 
     var url by mutableStateOf("about:blank")
     var title by mutableStateOf("")
@@ -69,9 +72,21 @@ class BrowserTab internal constructor(
     var pageError by mutableStateOf<PageError?>(null)
         private set
 
-    /** How far the page is scrolled down, in pixels (pull to refresh only works at the top). */
+    /** How far the page is scrolled down, in pixels (reported by Firefox). */
     @Volatile
     internal var scrollOffset = 0
+
+    /** False as soon as the page is scrolled down (reported by the page script). */
+    @Volatile
+    internal var domAtTop = true
+
+    /** The last time the tab was shown or left. Tabs that stay unused go to sleep. */
+    @Volatile
+    internal var lastUsed = System.currentTimeMillis()
+
+    /** The last time a page started or finished loading in this tab. */
+    @Volatile
+    internal var lastLoadAt = 0L
 
     private val json = Json { ignoreUnknownKeys = true }
     private val handler = Handler(Looper.getMainLooper())
@@ -121,6 +136,9 @@ class BrowserTab internal constructor(
                     }
                     owner.tabsChanged()
                 }
+                "scroll" -> {
+                    domAtTop = m.optBoolean("top", true)
+                }
                 "user" -> {
                     val label = m.optString("label")
                     val text = when (m.optString("kind")) {
@@ -147,9 +165,10 @@ class BrowserTab internal constructor(
         }
     }
 
-    init {
+    /** Connects a Firefox session to this tab (done for the first session and after every sleep). */
+    private fun wireSession(s: GeckoSession) {
         // A response Firefox cannot show (a ZIP, an APK, an attachment) is a download.
-        session.setContentDelegate(
+        s.setContentDelegate(
             object : GeckoSession.ContentDelegate {
                 override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                     owner.startDownload(response.uri, response.headers, response.body)
@@ -157,7 +176,7 @@ class BrowserTab internal constructor(
             },
         )
 
-        session.setProgressDelegate(
+        s.setProgressDelegate(
             object : GeckoSession.ProgressDelegate {
                 override fun onPageStart(session: GeckoSession, url: String) {
                     loading = true
@@ -167,6 +186,8 @@ class BrowserTab internal constructor(
                     lastStopFailed = false
                     userStopped = false
                     scrollOffset = 0
+                    domAtTop = true
+                    lastLoadAt = System.currentTimeMillis()
                     this@BrowserTab.url = url
                     if (owner.current === this@BrowserTab) owner.noteUser("opened " + url.take(100))
                 }
@@ -175,6 +196,7 @@ class BrowserTab internal constructor(
                     loading = false
                     isLoading = false
                     progress = 100
+                    lastLoadAt = System.currentTimeMillis()
                     if (!success && !userStopped) {
                         lastStopFailed = true
                         // Wait a moment: a newer load may already be starting.
@@ -195,7 +217,7 @@ class BrowserTab internal constructor(
                 }
             },
         )
-        session.setNavigationDelegate(
+        s.setNavigationDelegate(
             object : GeckoSession.NavigationDelegate {
                 override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                     canBack = canGoBack
@@ -206,13 +228,17 @@ class BrowserTab internal constructor(
                 }
             },
         )
-        session.setScrollDelegate(
+        s.setScrollDelegate(
             object : GeckoSession.ScrollDelegate {
                 override fun onScrollChanged(session: GeckoSession, scrollX: Int, scrollY: Int) {
                     scrollOffset = scrollY
                 }
             },
         )
+    }
+
+    init {
+        wireSession(session)
 
         // A tab restored from the last run: it shows its old address and loads when it is opened.
         if (!restoredUrl.isNullOrBlank()) {
@@ -227,6 +253,9 @@ class BrowserTab internal constructor(
 
     internal fun isOpened(): Boolean = opened
 
+    /** True while the tab has no running Firefox session (it wakes up when it is shown). */
+    fun isAsleep(): Boolean = !opened
+
     /** Starts the Firefox session of a tab that was asleep. Called when the tab is shown. */
     internal fun ensureOpen(ext: WebExtension?) {
         if (opened) return
@@ -234,6 +263,32 @@ class BrowserTab internal constructor(
         session.open(runtime)
         if (ext != null) installBridge(ext)
         if (owner.extensionReady) onExtensionReady()
+    }
+
+    /**
+     * Frees the memory of a tab that is not shown: the Firefox session is closed and the tab keeps
+     * only its address and title. It loads the page again when it is shown. Never call this for
+     * the tab that is shown.
+     */
+    internal fun sleep() {
+        if (!opened || loading) return
+        val keep = if (isHome) "" else url
+        handler.removeCallbacksAndMessages(null)
+        session.close()
+        frames.clear()
+        subFrames = emptyList()
+        replies.clear()
+        opened = false
+        session = GeckoSession()
+        wireSession(session)
+        canBack = false
+        canForward = false
+        isLoading = false
+        progress = 0
+        pageError = null
+        scrollOffset = 0
+        domAtTop = true
+        pendingUrl = if (keep.isBlank()) null else keep
     }
 
     /** The tab that is shown is active, every other tab is inactive. */
@@ -285,7 +340,9 @@ class BrowserTab internal constructor(
         session.goForward()
     }
 
+    /** Reloads the page. Ignored while a page is loading: it would cancel the link just clicked. */
     fun reload() {
+        if (loading) return
         pageError = null
         session.reload()
     }

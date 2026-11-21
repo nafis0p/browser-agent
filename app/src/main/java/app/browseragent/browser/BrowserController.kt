@@ -1,6 +1,8 @@
 package app.browseragent.browser
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.ViewGroup
 import android.widget.Toast
@@ -25,6 +27,12 @@ private const val EXT_LOCATION = "resource://android/assets/agent/"
 private const val EXT_ID = "agent@browseragent.app"
 private const val MAX_TABS = 12
 
+// At most this many tabs keep a running Firefox session; the longest unused ones go to sleep.
+private const val MAX_AWAKE_TABS = 5
+
+// Pull to refresh needs a long pull, so a quick scroll can never reload the page by accident.
+private const val REFRESH_PULL_DP = 240
+
 /** What the user long-pressed on a page: a link, an image, or both (an image inside a link). */
 class ContextInfo(val linkUri: String?, val imageUri: String?, val label: String)
 
@@ -32,6 +40,9 @@ class ContextInfo(val linkUri: String?, val imageUri: String?, val label: String
  * Manages the browser tabs. One GeckoView shows the current tab; every tab has its own session.
  * The properties and functions below act on the current tab, so the rest of the app can treat
  * the controller like a single browser. The open tabs are remembered between app starts.
+ *
+ * Tabs that are not shown go to sleep after a while (their Firefox session is closed to free
+ * memory) and wake up when they are shown.
  *
  * While the AI works it is pinned to one tab (the one that was shown when it started, or the
  * one it opened or switched to itself). If the user leaves that tab, the AI waits for the user.
@@ -88,10 +99,21 @@ class BrowserController(context: Context) {
     /** Called with (url, title) when a page has loaded (for the browsing history). */
     var onPageLoaded: ((String, String) -> Unit)? = null
 
+    /** Minutes without use after which a background tab goes to sleep (0: never). */
+    var sleepAfterMinutes: () -> Int = { 10 }
+
     // What the user did by hand (not the agent), so the agent is never working blind.
     private val userEvents = ArrayList<String>()
     private var agentActive = false
     private var quietUntil = 0L
+
+    private val sleepHandler = Handler(Looper.getMainLooper())
+    private val sleepCheck = object : Runnable {
+        override fun run() {
+            sweepSleepyTabs()
+            sleepHandler.postDelayed(this, 60_000)
+        }
+    }
 
     val current: BrowserTab
         get() = tabs[currentIndex.coerceIn(0, tabs.lastIndex)]
@@ -130,12 +152,23 @@ class BrowserController(context: Context) {
         }
         attach(tabs[currentIndex])
 
-        // Pull to refresh works only while the page is scrolled to the very top.
-        container.setOnChildScrollUpCallback { _, _ -> current.scrollOffset > 0 }
+        // Pull to refresh: a long pull, only at the very top of a page that is not loading and
+        // did not just finish loading. Everything else is a normal scroll.
+        val pull = (REFRESH_PULL_DP * context.resources.displayMetrics.density).toInt()
+        container.setDistanceToTriggerSync(pull)
+        container.setOnChildScrollUpCallback { _, _ ->
+            val t = current
+            t.scrollOffset > 0 ||
+                !t.domAtTop ||
+                t.isLoading ||
+                System.currentTimeMillis() - t.lastLoadAt < 1500
+        }
         container.setOnRefreshListener {
             current.reload()
             container.postDelayed({ container.isRefreshing = false }, 700)
         }
+
+        sleepHandler.postDelayed(sleepCheck, 60_000)
 
         // Pages are loaded only after the extension is installed, so its content script
         // is present from the first page on.
@@ -171,7 +204,10 @@ class BrowserController(context: Context) {
      * old tab.
      */
     private fun attach(tab: BrowserTab) {
+        val now = System.currentTimeMillis()
+        shown?.lastUsed = now
         shown?.setActive(false)
+        tab.lastUsed = now
         tab.ensureOpen(extension)
         if (attached) webView.releaseSession()
         webView.setSession(tab.session)
@@ -188,6 +224,41 @@ class BrowserController(context: Context) {
     internal fun startDownload(uri: String, headers: Map<String, String>, body: InputStream?) {
         val name = downloads.start(uri, headers, body)
         Toast.makeText(appContext, "Downloading " + name, Toast.LENGTH_SHORT).show()
+    }
+
+    // ---------------------------------------------------------------- tab sleep
+
+    /**
+     * Puts tabs to sleep: first those unused for longer than the set time, then the longest unused
+     * ones when more than a few tabs are awake. The shown tab and the tab of the AI never sleep.
+     */
+    private fun sweepSleepyTabs() {
+        val minutes = sleepAfterMinutes()
+        val now = System.currentTimeMillis()
+        if (minutes > 0) {
+            for (t in tabs) {
+                if (t === shown || t.id == agentTabId || !t.isOpened()) continue
+                if (now - t.lastUsed > minutes * 60_000L) t.sleep()
+            }
+        }
+        var extra = tabs.count { it.isOpened() } - MAX_AWAKE_TABS
+        if (extra > 0) {
+            val candidates = tabs
+                .filter { it !== shown && it.id != agentTabId && it.isOpened() }
+                .sortedBy { it.lastUsed }
+            for (t in candidates) {
+                if (extra <= 0) break
+                t.sleep()
+                extra--
+            }
+        }
+    }
+
+    /** Puts every tab that is not in use to sleep (used when the phone is low on memory). */
+    fun sleepBackgroundTabs() {
+        for (t in tabs) {
+            if (t !== shown && t.id != agentTabId) t.sleep()
+        }
     }
 
     // ---------------------------------------------------------------- long press menu
@@ -339,6 +410,7 @@ class BrowserController(context: Context) {
     }
 
     fun destroy() {
+        sleepHandler.removeCallbacks(sleepCheck)
         persistTabs()
         for (t in tabs) t.destroy()
     }

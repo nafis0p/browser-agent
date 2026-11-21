@@ -231,6 +231,20 @@
     setTimeout(sendPage, 1500);
   });
 
+  // ---- Tell the app whether the page is scrolled to the very top. Pull to refresh only works
+  // there, so a normal scroll can never reload the page by accident. Only changes are sent.
+  if (isTop) {
+    var wasAtTop = true;
+    window.addEventListener('scroll', function () {
+      var y = window.scrollY || (document.documentElement && document.documentElement.scrollTop) || 0;
+      var atTop = y <= 2;
+      if (atTop !== wasAtTop) {
+        wasAtTop = atTop;
+        port.postMessage({ type: 'scroll', top: atTop });
+      }
+    }, { passive: true });
+  }
+
   // ---- Report what the USER does by hand, so the agent never works from a stale picture.
   var lastKey = '';
   var lastAt = 0;
