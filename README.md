@@ -24,6 +24,6 @@ Build locally: open in Android Studio (JDK 17), or `gradle assembleDebug` with G
 
 - Use models that support tool/function calling.
 - Cross-origin iframes, canvas UIs and bot-protected sites are hard for any WebView agent.
-- Only remote MCP servers work (stdio servers can't run on Android).
+- Only remote MCP servers work.
 - LLM calls are non-streaming.
 - Early version: expect rough edges.
