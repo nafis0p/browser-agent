@@ -246,11 +246,16 @@ internal fun SideMenu(
                         HorizontalDivider()
                     }
 
-                    // Add-ons for Firefox on Android. The entries are visible but not built yet.
-                    SideAccordion("Extensions", hint = "Soon") {
-                        SideRow("Installed extensions", enabled = false, hint = "Soon")
-                        SideRow("Get extensions", enabled = false, hint = "Soon")
-                        SideRow("Extension settings", enabled = false, hint = "Soon")
+                    // Add-ons from Mozilla's site that work on Android (uBlock Origin and more).
+                    SideAccordion("Extensions") {
+                        SideRow("Installed extensions (" + browser.extensions.installed.size + ")") {
+                            onClose()
+                            go(Page.EXTENSIONS)
+                        }
+                        SideRow("Get extensions") {
+                            onClose()
+                            go(Page.ADDONS)
+                        }
                     }
                     HorizontalDivider()
 

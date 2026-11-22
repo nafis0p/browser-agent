@@ -25,7 +25,7 @@ import app.browseragent.data.AppPrefs
 import java.text.DateFormat
 import java.util.Date
 
-internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS, DOWNLOADS }
+internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS, DOWNLOADS, EXTENSIONS, ADDONS }
 
 private fun titleOf(p: Page): String = when (p) {
     Page.HISTORY -> "History"
@@ -33,6 +33,8 @@ private fun titleOf(p: Page): String = when (p) {
     Page.SETTINGS -> "Settings"
     Page.TABS -> "Tabs"
     Page.DOWNLOADS -> "Downloads"
+    Page.EXTENSIONS -> "Extensions"
+    Page.ADDONS -> "Get extensions"
     Page.BROWSER -> ""
 }
 
@@ -44,7 +46,10 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
     var aiOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = page != Page.BROWSER) { page = Page.BROWSER }
+    // Back from the store goes to the list of installed extensions, from anywhere else to the browser.
+    val backTo = if (page == Page.ADDONS) Page.EXTENSIONS else Page.BROWSER
+
+    BackHandler(enabled = page != Page.BROWSER) { page = backTo }
     // Back closes the find bar first.
     BackHandler(enabled = browser.findOpen && page == Page.BROWSER) { browser.closeFind() }
     // Registered last, so Back closes the menu before everything else.
@@ -66,7 +71,7 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
                 when (page) {
                     Page.SETTINGS -> SettingsNav(vm, prefs) { page = Page.BROWSER }
                     else -> Column(Modifier.fillMaxSize()) {
-                        SubBar(titleOf(page)) { page = Page.BROWSER }
+                        SubBar(titleOf(page)) { page = backTo }
                         Box(Modifier.weight(1f)) {
                             when (page) {
                                 Page.HISTORY -> HistoryScreen(vm, browser) { page = Page.BROWSER }
@@ -76,6 +81,12 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
                                 }
                                 Page.TABS -> TabsScreen(browser) { page = Page.BROWSER }
                                 Page.DOWNLOADS -> DownloadsScreen(browser)
+                                Page.EXTENSIONS -> ExtensionsScreen(
+                                    browser,
+                                    onGetMore = { page = Page.ADDONS },
+                                    onOpenTab = { page = Page.BROWSER },
+                                )
+                                Page.ADDONS -> ExtensionStoreScreen(browser)
                                 else -> {}
                             }
                         }
@@ -108,6 +119,9 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
 
     // Long press on a link or an image.
     ContextMenuDialog(browser)
+
+    // An extension is about to be installed: the user decides.
+    ExtensionPromptDialog(browser)
 }
 
 @Composable
