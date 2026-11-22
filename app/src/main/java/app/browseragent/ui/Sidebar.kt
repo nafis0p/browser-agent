@@ -200,7 +200,10 @@ internal fun SideMenu(
                     SideRow("Bookmarks", enabled = false, hint = "Soon")
                     HorizontalDivider()
 
-                    SideRow("Find in page", enabled = false, hint = "Soon")
+                    SideRow("Find in page", enabled = !browser.isHome) {
+                        onClose()
+                        browser.openFind()
+                    }
                     SideRow("Print", enabled = false, hint = "Soon")
                     SideRow("Share link", enabled = !browser.isHome) {
                         onClose()

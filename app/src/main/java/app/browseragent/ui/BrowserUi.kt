@@ -45,7 +45,9 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
     var menuOpen by remember { mutableStateOf(false) }
 
     BackHandler(enabled = page != Page.BROWSER) { page = Page.BROWSER }
-    // Registered last, so Back closes the menu first.
+    // Back closes the find bar first.
+    BackHandler(enabled = browser.findOpen && page == Page.BROWSER) { browser.closeFind() }
+    // Registered last, so Back closes the menu before everything else.
     BackHandler(enabled = menuOpen) { menuOpen = false }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -103,6 +105,9 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
             dismissButton = { TextButton(onClick = { vm.answerConfirm(false) }) { Text("Deny") } },
         )
     }
+
+    // Long press on a link or an image.
+    ContextMenuDialog(browser)
 }
 
 @Composable
@@ -128,6 +133,7 @@ private fun BrowserPage(
     go: (Page) -> Unit,
     onMenu: () -> Unit,
 ) {
+    val cs = MaterialTheme.colorScheme
     val focus = LocalFocusManager.current
     val aiOn = vm.prefs.agentEnabled
     val home = browser.isHome
@@ -143,6 +149,29 @@ private fun BrowserPage(
             addrText = text
         }
         ProgressLine(browser)
+
+        // The AI works in another tab than the one that is shown.
+        if (vm.running && browser.agentAway) {
+            Surface(
+                color = cs.tertiaryContainer,
+                modifier = Modifier.fillMaxWidth().clickable { browser.showAgentTab() },
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "The AI is working in another tab",
+                        Modifier.weight(1f),
+                        color = cs.onTertiaryContainer,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text("Go there \u25b8", color = cs.onTertiaryContainer, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+
+        if (browser.findOpen) FindBar(browser)
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // The Firefox view lives inside a pull-to-refresh layout (pull down at the top of a page).
