@@ -78,6 +78,14 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // The phone is short of memory: tabs that are not in use go to sleep.
+        if (::browser.isInitialized && level >= TRIM_MEMORY_RUNNING_LOW) {
+            browser.sleepBackgroundTabs()
+        }
+    }
+
     override fun onDestroy() {
         browser.destroy()
         super.onDestroy()

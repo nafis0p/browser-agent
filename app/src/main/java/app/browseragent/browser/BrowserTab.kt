@@ -168,13 +168,23 @@ class BrowserTab internal constructor(
         }
     }
 
-    /** Connects a Firefox session to this tab (done for the first session and after every sleep). */
+    /** Connects a Firefox session to this tab (done for the first session and after every reset). */
     private fun wireSession(s: GeckoSession) {
         s.setContentDelegate(
             object : GeckoSession.ContentDelegate {
                 // A response Firefox cannot show (a ZIP, an APK, an attachment) is a download.
                 override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                     owner.startDownload(response.uri, response.headers, response.body)
+                }
+
+                // The process of the page crashed, or Android ended it to free memory: without a
+                // new session the page stays frozen for good.
+                override fun onCrash(session: GeckoSession) {
+                    owner.reviveTab(this@BrowserTab)
+                }
+
+                override fun onKill(session: GeckoSession) {
+                    owner.reviveTab(this@BrowserTab)
                 }
 
                 // Long press on a link or an image: the screen shows a menu for it.
@@ -286,19 +296,19 @@ class BrowserTab internal constructor(
     }
 
     /**
-     * Frees the memory of a tab that is not shown: the Firefox session is closed and the tab keeps
-     * only its address and title. It loads the page again when it is shown. Never call this for
-     * the tab that is shown.
+     * Throws the Firefox session away and prepares a fresh one. The tab keeps its address and
+     * loads it again when it is opened. Used to free memory and to recover a frozen page. If the
+     * tab is shown, the screen must let go of the old session before this is called.
      */
-    internal fun sleep() {
-        if (!opened || loading) return
+    internal fun resetSession() {
         val keep = if (isHome) "" else url
         handler.removeCallbacksAndMessages(null)
-        session.close()
+        if (opened) runCatching { session.close() }
         frames.clear()
         subFrames = emptyList()
         replies.clear()
         opened = false
+        loading = false
         session = GeckoSession()
         wireSession(session)
         canBack = false
@@ -309,6 +319,18 @@ class BrowserTab internal constructor(
         scrollOffset = 0
         domAtTop = true
         pendingUrl = if (keep.isBlank()) null else keep
+    }
+
+    /**
+     * Frees the memory of a tab that is not shown: the Firefox session is closed and the tab keeps
+     * only its address and title. It loads the page again when it is shown. Never call this for
+     * the tab that is shown.
+     */
+    internal fun sleep() {
+        if (!opened) return
+        // A load that has hung for a long time does not keep the tab awake.
+        if (loading && System.currentTimeMillis() - lastLoadAt < 30_000) return
+        resetSession()
     }
 
     /** The tab that is shown is active, every other tab is inactive. */
@@ -360,11 +382,23 @@ class BrowserTab internal constructor(
         session.goForward()
     }
 
-    /** Reloads the page. Ignored while a page is loading: it would cancel the link just clicked. */
+    /**
+     * Reloads the page. A load that has only just begun (for example a link that was just tapped)
+     * is not interrupted. If the reload does not make anything happen, the page process is stuck
+     * and a fresh session is started.
+     */
     fun reload() {
-        if (loading) return
+        val now = System.currentTimeMillis()
+        if (loading && now - lastLoadAt < 2000) return
         pageError = null
+        val before = lastLoadAt
         session.reload()
+        handler.postDelayed(
+            {
+                if (opened && lastLoadAt == before) owner.reviveTab(this)
+            },
+            4000,
+        )
     }
 
     fun stop() {
@@ -429,8 +463,17 @@ class BrowserTab internal constructor(
         }
         val top = topFrame()
             ?: return "ERROR: the page is not ready (browser bridge not connected yet). Wait a moment and call snapshot again."
-        val data = ask(top, JSONObject().put("op", "snapshot").put("prefix", ""), 8000)
-            ?: return "ERROR: the page did not respond. Try again."
+        var data = ask(top, JSONObject().put("op", "snapshot").put("prefix", ""), 8000)
+        if (data == null) {
+            // The page does not answer: its process may be stuck or gone. Start it again once.
+            val restarted = withContext(Dispatchers.Main) { owner.reviveTab(this@BrowserTab) }
+            if (!restarted) return "ERROR: the page did not respond. Try again."
+            settle()
+            val fresh = topFrame()
+                ?: return "ERROR: the page stopped responding and was restarted but is not ready yet. Call snapshot again."
+            data = ask(fresh, JSONObject().put("op", "snapshot").put("prefix", ""), 8000)
+                ?: return "ERROR: the page still does not respond after a restart. Tell the user."
+        }
 
         val subs = frames.filter { it.ready && !it.isTop }.take(6)
         subFrames = subs

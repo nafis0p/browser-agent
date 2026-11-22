@@ -17,6 +17,7 @@ import app.browseragent.data.TabStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
 import java.io.InputStream
@@ -102,6 +103,7 @@ class BrowserController(context: Context) {
     private var attached = false
     private var shown: BrowserTab? = null
     private var nextTabId = 1
+    private var lastRevive = 0L
 
     /** The tab of the last snapshot the AI took. Ids from a snapshot only work in that tab. */
     private var lastSnapTab = -1
@@ -166,15 +168,17 @@ class BrowserController(context: Context) {
         attach(tabs[currentIndex])
 
         // Pull to refresh: a long pull, only at the very top of a page that is not loading and
-        // did not just finish loading. Everything else is a normal scroll.
+        // did not just finish loading. Everything else is a normal scroll. A load that hangs for
+        // a long time does not block it.
         val pull = (REFRESH_PULL_DP * context.resources.displayMetrics.density).toInt()
         container.setDistanceToTriggerSync(pull)
         container.setOnChildScrollUpCallback { _, _ ->
             val t = current
+            val since = System.currentTimeMillis() - t.lastLoadAt
             t.scrollOffset > 0 ||
                 !t.domAtTop ||
-                t.isLoading ||
-                System.currentTimeMillis() - t.lastLoadAt < 1500
+                (t.isLoading && since < 10_000) ||
+                since < 1500
         }
         container.setOnRefreshListener {
             current.reload()
@@ -236,6 +240,30 @@ class BrowserController(context: Context) {
         notifyTabActive(tab, true)
         shown = tab
         attached = true
+    }
+
+    /**
+     * A page stopped responding, or its process crashed or was ended by Android to free memory.
+     * The tab gets a fresh Firefox session and loads its page again. Returns false when this
+     * already happened a moment ago (so a page that keeps failing cannot cause a loop).
+     */
+    internal fun reviveTab(tab: BrowserTab): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastRevive < 15_000) return false
+        lastRevive = now
+        val visible = tab === shown
+        if (visible) {
+            webView.releaseSession()
+            attached = false
+        }
+        tab.resetSession()
+        if (visible) {
+            attach(tab)
+            Toast.makeText(appContext, "The page stopped responding and was reloaded", Toast.LENGTH_SHORT).show()
+        } else if (tab.id == agentTabId) {
+            tab.ensureOpen(extension)
+        }
+        return true
     }
 
     internal fun recordPage(url: String, title: String) {
@@ -648,7 +676,11 @@ class BrowserController(context: Context) {
         private fun sharedRuntime(context: Context): GeckoRuntime {
             val existing = sharedRuntimeInstance
             if (existing != null) return existing
-            val created = GeckoRuntime.create(context.applicationContext)
+            // The web API lets the add-on site (addons.mozilla.org) install add-ons directly.
+            val settings = GeckoRuntimeSettings.Builder()
+                .extensionsWebAPIEnabled(true)
+                .build()
+            val created = GeckoRuntime.create(context.applicationContext, settings)
             sharedRuntimeInstance = created
             return created
         }
