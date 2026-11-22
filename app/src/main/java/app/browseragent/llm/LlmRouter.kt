@@ -2,6 +2,7 @@ package app.browseragent.llm
 
 import app.browseragent.data.Store
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -26,6 +27,9 @@ class LlmException(message: String) : Exception(message)
 // Google's documented value for a function call that has no real thought signature (for example
 // one that was made by another model). Gemini 3 refuses a history without a signature.
 private const val DUMMY_SIGNATURE = "skip_thought_signature_validator"
+
+// A busy server (HTTP 500, 502, 503, 504) is tried again this many times before the next provider.
+private const val MAX_RETRIES = 2
 
 /** Tries each route of a model alias in order; falls back on 429 / 5xx / network errors. */
 class LlmRouter(private val store: Store, private val client: OkHttpClient) {
@@ -73,13 +77,26 @@ class LlmRouter(private val store: Store, private val client: OkHttpClient) {
                     .header("Authorization", "Bearer " + p.apiKey)
                     .post(body.toString().toRequestBody("application/json".toMediaType()))
                     .build()
-                val raw: Raw? = try {
-                    client.newCall(req).execute().use {
-                        Raw(it.code, it.body?.string().orEmpty(), it.header("Retry-After"))
+
+                // A busy or briefly broken server often works a moment later: try again before
+                // giving up on this route.
+                var last: Raw? = null
+                var tries = 0
+                while (true) {
+                    last = try {
+                        client.newCall(req).execute().use {
+                            Raw(it.code, it.body?.string().orEmpty(), it.header("Retry-After"))
+                        }
+                    } catch (e: IOException) {
+                        null
                     }
-                } catch (e: IOException) {
-                    null
+                    val c = last?.code ?: 0
+                    val busy = last == null || c == 500 || c == 502 || c == 503 || c == 504
+                    if (!busy || tries >= MAX_RETRIES) break
+                    tries++
+                    delay(1500L * tries * tries)
                 }
+                val raw = last
                 if (raw == null) {
                     attempts.add(p.name + ": network error")
                     continue
@@ -97,7 +114,7 @@ class LlmRouter(private val store: Store, private val client: OkHttpClient) {
                         attempts,
                     )
                 }
-                attempts.add(p.name + ": HTTP " + raw.code)
+                attempts.add(p.name + ": HTTP " + raw.code + hint(raw.body))
                 if (raw.code == 429) {
                     val secs = (raw.retryAfter?.toDoubleOrNull() ?: 30.0).coerceIn(0.0, 300.0)
                     cooldown[key(route.provider, route.model)] = now + (secs * 1000).toLong()
@@ -107,6 +124,16 @@ class LlmRouter(private val store: Store, private val client: OkHttpClient) {
             }
             throw LlmException("All providers failed: " + attempts.joinToString("; "))
         }
+
+    /** The short reason a provider gave in its error answer, for example that the model is busy. */
+    private fun hint(body: String): String {
+        val msg = runCatching {
+            val root = json.parseToJsonElement(body)
+            val o = (if (root is JsonArray) root.firstOrNull() else root) as? JsonObject
+            ((o?.get("error") as? JsonObject)?.get("message") as? JsonPrimitive)?.contentOrNull
+        }.getOrNull()
+        return if (msg.isNullOrBlank()) "" else " (" + msg.take(110) + ")"
+    }
 
     /**
      * Makes the tool calls of earlier assistant messages fit the provider that gets them now.

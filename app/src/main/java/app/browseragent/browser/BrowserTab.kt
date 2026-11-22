@@ -20,10 +20,12 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import org.json.JSONArray
 import org.json.JSONObject
+import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 
 internal const val NATIVE_APP = "browser"
@@ -95,8 +97,9 @@ class BrowserTab internal constructor(
     private var loading = false
     private var opened = false
     private var pendingUrl: String? = null
-    private var userStopped = false
-    private var lastStopFailed = false
+
+    // When Firefox last reported that a page could not be loaded.
+    private var lastErrorAt = 0L
 
     /** One content-script connection (the top page or an iframe). */
     private class Frame(val port: WebExtension.Port) {
@@ -200,9 +203,8 @@ class BrowserTab internal constructor(
                     loading = true
                     isLoading = true
                     progress = 0
-                    pageError = null
-                    lastStopFailed = false
-                    userStopped = false
+                    // Firefox may start its own error page right after reporting a failed load.
+                    if (System.currentTimeMillis() - lastErrorAt > 1000) pageError = null
                     scrollOffset = 0
                     domAtTop = true
                     lastLoadAt = System.currentTimeMillis()
@@ -215,18 +217,6 @@ class BrowserTab internal constructor(
                     isLoading = false
                     progress = 100
                     lastLoadAt = System.currentTimeMillis()
-                    if (!success && !userStopped) {
-                        lastStopFailed = true
-                        // Wait a moment: a newer load may already be starting.
-                        handler.postDelayed(
-                            {
-                                if (lastStopFailed && !loading && pageError == null) {
-                                    pageError = PageError("network", this@BrowserTab.url)
-                                }
-                            },
-                            600,
-                        )
-                    }
                     owner.tabsChanged()
                 }
 
@@ -243,6 +233,18 @@ class BrowserTab internal constructor(
 
                 override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
                     canForward = canGoForward
+                }
+
+                // Only a load that really failed (no connection, unknown site, bad certificate)
+                // shows the error page. A page that merely ended oddly, such as an image, does not.
+                override fun onLoadError(
+                    session: GeckoSession,
+                    uri: String?,
+                    error: WebRequestError,
+                ): GeckoResult<String> {
+                    lastErrorAt = System.currentTimeMillis()
+                    pageError = PageError("network", uri ?: this@BrowserTab.url)
+                    return GeckoResult.fromValue<String>(null)
                 }
             },
         )
@@ -366,7 +368,6 @@ class BrowserTab internal constructor(
     }
 
     fun stop() {
-        userStopped = true
         session.stop()
     }
 
