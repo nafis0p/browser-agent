@@ -67,6 +67,9 @@ class BrowserController(context: Context) {
     private val runtime: GeckoRuntime = sharedRuntime(context)
     private val tabStore = TabStore(context)
 
+    /** Add-ons (extensions) such as an ad blocker. */
+    val extensions = Extensions(runtime)
+
     val tabs = mutableStateListOf<BrowserTab>()
 
     var currentIndex by mutableStateOf(0)
@@ -179,6 +182,7 @@ class BrowserController(context: Context) {
         }
 
         sleepHandler.postDelayed(sleepCheck, 60_000)
+        extensions.refresh()
 
         // Pages are loaded only after the extension is installed, so its content script
         // is present from the first page on.
@@ -208,6 +212,12 @@ class BrowserController(context: Context) {
         }
     }
 
+    /** Tells the add-ons which tab is the active one (they use it for their per-page features). */
+    private fun notifyTabActive(tab: BrowserTab, active: Boolean) {
+        if (!tab.isOpened()) return
+        runCatching { runtime.webExtensionController.setTabActive(tab.session, active) }
+    }
+
     /**
      * Shows the tab in the Firefox view (and wakes it up if it was asleep). The tab that was shown
      * before becomes inactive and the new one active, otherwise Firefox may keep painting the
@@ -215,6 +225,7 @@ class BrowserController(context: Context) {
      */
     private fun attach(tab: BrowserTab) {
         val now = System.currentTimeMillis()
+        shown?.let { notifyTabActive(it, false) }
         shown?.lastUsed = now
         shown?.setActive(false)
         tab.lastUsed = now
@@ -222,6 +233,7 @@ class BrowserController(context: Context) {
         if (attached) webView.releaseSession()
         webView.setSession(tab.session)
         tab.setActive(true)
+        notifyTabActive(tab, true)
         shown = tab
         attached = true
     }
