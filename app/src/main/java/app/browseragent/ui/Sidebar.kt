@@ -124,6 +124,11 @@ internal fun SideMenu(
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
 
+    // The list of extensions may have changed (for example one was added from the add-on site).
+    LaunchedEffect(open) {
+        if (open) browser.extensions.refresh()
+    }
+
     Box(Modifier.fillMaxSize()) {
         AnimatedVisibility(visible = open, enter = fadeIn(), exit = fadeOut()) {
             Box(
@@ -246,15 +251,25 @@ internal fun SideMenu(
                         HorizontalDivider()
                     }
 
-                    // Add-ons from Mozilla's site that work on Android (uBlock Origin and more).
+                    // Each installed extension is listed here: tap it to open its own panel for the
+                    // page you are on (for uBlock Origin: this site's switch, what was blocked, the
+                    // element picker).
                     SideAccordion("Extensions") {
-                        SideRow("Installed extensions (" + browser.extensions.installed.size + ")") {
+                        val active = browser.extensions.installed.filter { it.enabled }
+                        if (active.isEmpty()) {
+                            SideRow("No extensions yet", enabled = false)
+                        }
+                        for (item in active) {
+                            SideRow(item.name) {
+                                onClose()
+                                if (!browser.extensions.openAction(item.id)) {
+                                    Toast.makeText(ctx, item.name + " has no button", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                        SideRow("Manage extensions") {
                             onClose()
                             go(Page.EXTENSIONS)
-                        }
-                        SideRow("Get extensions") {
-                            onClose()
-                            go(Page.ADDONS)
                         }
                     }
                     HorizontalDivider()

@@ -33,8 +33,8 @@ private fun titleOf(p: Page): String = when (p) {
     Page.SETTINGS -> "Settings"
     Page.TABS -> "Tabs"
     Page.DOWNLOADS -> "Downloads"
-    Page.EXTENSIONS -> "Extensions"
-    Page.ADDONS -> "Get extensions"
+    Page.EXTENSIONS -> "Manage extensions"
+    Page.ADDONS -> "Find extensions"
     Page.BROWSER -> ""
 }
 
@@ -56,11 +56,12 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
     BackHandler(enabled = menuOpen) { menuOpen = false }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // The browser stays composed so the Firefox view keeps its state.
+        // The browser stays composed so the Firefox view keeps its state. It is hidden while an
+        // extension panel is open, because that panel has its own Firefox view.
         BrowserPage(
             vm = vm,
             browser = browser,
-            visible = page == Page.BROWSER,
+            visible = page == Page.BROWSER && browser.extensions.popup == null,
             aiOpen = aiOpen,
             onToggleAi = { aiOpen = !aiOpen },
             go = { page = it },
@@ -104,6 +105,9 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
             onToggleAi = { aiOpen = !aiOpen },
             go = { page = it },
         )
+
+        // The panel of an extension's button (full screen, above everything).
+        ExtensionPopupScreen(browser)
     }
 
     val ask = vm.pendingConfirm

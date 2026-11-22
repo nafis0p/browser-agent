@@ -1,6 +1,7 @@
 package app.browseragent.ui
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,11 +16,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import app.browseragent.browser.Amo
 import app.browseragent.browser.AmoAddon
 import app.browseragent.browser.BrowserController
 import app.browseragent.browser.ExtItem
 import kotlinx.coroutines.delay
+import org.mozilla.geckoview.GeckoView
 
 private fun usersText(n: Long): String = when {
     n >= 1_000_000L -> String.format(java.util.Locale.US, "%.1fM users", n / 1_000_000.0)
@@ -89,6 +92,41 @@ internal fun ExtensionPromptDialog(browser: BrowserController) {
     )
 }
 
+/**
+ * The panel of an extension's button, full screen (for uBlock Origin: the power button for this
+ * site, the blocked counters, the element picker). The page behind it is hidden meanwhile.
+ */
+@Composable
+internal fun ExtensionPopupScreen(browser: BrowserController) {
+    val popup = browser.extensions.popup ?: return
+    BackHandler { browser.extensions.closePopup() }
+    Surface(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = { browser.extensions.closePopup() }) { Text("\u2715 Close") }
+                Text(
+                    popup.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            key(popup.session) {
+                AndroidView(
+                    factory = { ctx ->
+                        GeckoView(ctx).also { it.setSession(popup.session) }
+                    },
+                    onRelease = { it.releaseSession() },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun InstalledRow(item: ExtItem, browser: BrowserController, onOpenTab: () -> Unit) {
     var confirmRemove by remember { mutableStateOf(false) }
@@ -148,17 +186,24 @@ private fun InstalledRow(item: ExtItem, browser: BrowserController, onOpenTab: (
     }
 }
 
-/** The add-ons that are installed: turn them on or off, open their settings, remove them. */
+/** Manage extensions: the installed ones, and two ways to add more. */
 @Composable
 internal fun ExtensionsScreen(browser: BrowserController, onGetMore: () -> Unit, onOpenTab: () -> Unit) {
     val ext = browser.extensions
     LaunchedEffect(Unit) { ext.refresh() }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = onGetMore, modifier = Modifier.fillMaxWidth()) { Text("Get extensions") }
+        Button(onClick = onGetMore, modifier = Modifier.fillMaxWidth()) { Text("Find extensions for Android") }
+        OutlinedButton(
+            onClick = {
+                browser.newTab("https://addons.mozilla.org/android/")
+                onOpenTab()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Open addons.mozilla.org") }
         if (ext.installed.isEmpty()) {
             Text(
-                "No extensions yet. An ad blocker such as uBlock Origin is a good first choice: tap Get extensions.",
+                "No extensions yet. An ad blocker such as uBlock Origin is a good first choice.",
                 Modifier.padding(8.dp),
             )
         }
