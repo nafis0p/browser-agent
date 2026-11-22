@@ -167,11 +167,29 @@ class BrowserTab internal constructor(
 
     /** Connects a Firefox session to this tab (done for the first session and after every sleep). */
     private fun wireSession(s: GeckoSession) {
-        // A response Firefox cannot show (a ZIP, an APK, an attachment) is a download.
         s.setContentDelegate(
             object : GeckoSession.ContentDelegate {
+                // A response Firefox cannot show (a ZIP, an APK, an attachment) is a download.
                 override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                     owner.startDownload(response.uri, response.headers, response.body)
+                }
+
+                // Long press on a link or an image: the screen shows a menu for it.
+                override fun onContextMenu(
+                    session: GeckoSession,
+                    screenX: Int,
+                    screenY: Int,
+                    element: GeckoSession.ContentDelegate.ContextElement,
+                ) {
+                    val link = element.linkUri?.takeIf { it.isNotBlank() }
+                    val image = if (element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE) {
+                        element.srcUri?.takeIf { it.isNotBlank() }
+                    } else {
+                        null
+                    }
+                    if (link == null && image == null) return
+                    val label = (element.title ?: element.altText ?: "").ifBlank { link ?: image ?: "" }
+                    owner.showContextMenu(ContextInfo(link, image, label))
                 }
             },
         )
@@ -367,6 +385,26 @@ class BrowserTab internal constructor(
     fun destroy() {
         handler.removeCallbacksAndMessages(null)
         if (opened) session.close()
+    }
+
+    // ---------------------------------------------------------------- find in page
+
+    /**
+     * Searches the page. A null query repeats the last search (next or previous match).
+     * The callback gets (found, number of the current match, total number of matches).
+     */
+    internal fun findInPage(query: String?, backwards: Boolean, onResult: (Boolean, Int, Int) -> Unit) {
+        if (!opened) return
+        val flags = if (backwards) GeckoSession.FINDER_FIND_BACKWARDS else 0
+        session.finder.find(query, flags).accept(
+            { r -> if (r != null) onResult(r.found, r.current, r.total) },
+            { },
+        )
+    }
+
+    /** Removes the highlighted matches. */
+    internal fun clearFind() {
+        if (opened) session.finder.clear()
     }
 
     // ---------------------------------------------------------------- agent API

@@ -84,6 +84,16 @@ class BrowserController(context: Context) {
     var agentTabId by mutableStateOf<Int?>(null)
         private set
 
+    // Find in page: the bar is open, which match is selected, how many there are.
+    var findOpen by mutableStateOf(false)
+        private set
+    var findCurrent by mutableStateOf(0)
+        private set
+    var findTotal by mutableStateOf(0)
+        private set
+    var findMissing by mutableStateOf(false)
+        private set
+
     internal var extensionReady = false
     private var extension: WebExtension? = null
     private var attached = false
@@ -271,6 +281,49 @@ class BrowserController(context: Context) {
         contextMenu = null
     }
 
+    // ---------------------------------------------------------------- find in page
+
+    fun openFind() {
+        if (current.isHome) return
+        findOpen = true
+        findCurrent = 0
+        findTotal = 0
+        findMissing = false
+    }
+
+    fun closeFind() {
+        if (findOpen) current.clearFind()
+        findOpen = false
+        findCurrent = 0
+        findTotal = 0
+        findMissing = false
+    }
+
+    /** Starts a new search for the text (an empty text clears the matches). */
+    fun find(query: String) {
+        if (query.isBlank()) {
+            current.clearFind()
+            findCurrent = 0
+            findTotal = 0
+            findMissing = false
+            return
+        }
+        current.findInPage(query, false) { found, cur, total ->
+            findMissing = !found
+            findCurrent = cur
+            findTotal = total
+        }
+    }
+
+    /** Goes to the next or the previous match of the last search. */
+    fun findStep(backwards: Boolean) {
+        current.findInPage(null, backwards) { found, cur, total ->
+            findMissing = !found
+            findCurrent = cur
+            findTotal = total
+        }
+    }
+
     // ---------------------------------------------------------------- remembering tabs
 
     private fun tabsState(): SavedTabs = SavedTabs(
@@ -295,6 +348,7 @@ class BrowserController(context: Context) {
 
     /** Shows a tab without telling the AI about it. */
     private fun showTab(index: Int) {
+        closeFind()
         currentIndex = index
         attach(tabs[index])
         tabsChanged()
@@ -350,6 +404,7 @@ class BrowserController(context: Context) {
 
     /** Closes every tab and leaves one fresh tab with the start page. */
     fun closeAllTabs() {
+        findOpen = false
         val old = tabs.toList()
         val fresh = BrowserTab(nextTabId++, this, runtime)
         tabs.clear()
@@ -379,6 +434,7 @@ class BrowserController(context: Context) {
 
     /** Shows the start page (the open page stays loaded underneath). */
     fun showHome() {
+        closeFind()
         current.showHome()
     }
 
