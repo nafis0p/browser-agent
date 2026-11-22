@@ -10,6 +10,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 data class ToolCall(val id: String, val name: String, val arguments: String)
 
@@ -22,11 +23,20 @@ data class ChatResult(
 
 class LlmException(message: String) : Exception(message)
 
+// Google's documented value for a function call that has no real thought signature (for example
+// one that was made by another model). Gemini 3 refuses a history without a signature.
+private const val DUMMY_SIGNATURE = "skip_thought_signature_validator"
+
 /** Tries each route of a model alias in order; falls back on 429 / 5xx / network errors. */
 class LlmRouter(private val store: Store, private val client: OkHttpClient) {
     private val json = Json { ignoreUnknownKeys = true }
     private val cooldown = HashMap<String, Long>()
     private val fallbackStatuses = setOf(401, 402, 403, 404, 408, 409, 425, 429)
+
+    /** The thought signature Gemini gave to a tool call, and the route that produced it. */
+    private class Sig(val signature: String, val via: String)
+
+    private val signatures = ConcurrentHashMap<String, Sig>()
 
     private class Raw(val code: Int, val body: String, val retryAfter: String?)
 
@@ -48,9 +58,11 @@ class LlmRouter(private val store: Store, private val client: OkHttpClient) {
                     attempts.add(route.provider + ": no API key")
                     continue
                 }
+                val via = p.name + "/" + route.model
+                val gemini = p.baseUrl.contains("googleapis.com", ignoreCase = true)
                 val body = buildJsonObject {
                     put("model", route.model)
-                    put("messages", JsonArray(messages))
+                    put("messages", JsonArray(adapt(messages, gemini, via)))
                     if (tools.isNotEmpty()) {
                         put("tools", tools)
                         put("tool_choice", "auto")
@@ -73,7 +85,7 @@ class LlmRouter(private val store: Store, private val client: OkHttpClient) {
                     continue
                 }
                 if (raw.code in 200..299) {
-                    val parsed = parse(raw.body)
+                    val parsed = parse(raw.body, via)
                     if (parsed == null) {
                         attempts.add(p.name + ": bad response")
                         continue
@@ -81,7 +93,7 @@ class LlmRouter(private val store: Store, private val client: OkHttpClient) {
                     return@withContext ChatResult(
                         parsed.first,
                         parsed.second,
-                        p.name + "/" + route.model,
+                        via,
                         attempts,
                     )
                 }
@@ -96,16 +108,52 @@ class LlmRouter(private val store: Store, private val client: OkHttpClient) {
             throw LlmException("All providers failed: " + attempts.joinToString("; "))
         }
 
-    private fun parse(body: String): Pair<String?, List<ToolCall>>? = try {
+    /**
+     * Makes the tool calls of earlier assistant messages fit the provider that gets them now.
+     * Gemini needs a thought signature on every function call (the real one when this same model
+     * made the call, a placeholder otherwise). Other providers never see the field.
+     */
+    private fun adapt(messages: List<JsonObject>, gemini: Boolean, via: String): List<JsonObject> {
+        if (messages.none { it["tool_calls"] != null }) return messages
+        return messages.map { m ->
+            val calls = m["tool_calls"] as? JsonArray ?: return@map m
+            val fixed = calls.map { c ->
+                val o = c.jsonObject
+                val base = o.filterKeys { it != "extra_content" }
+                if (!gemini) {
+                    JsonObject(base)
+                } else {
+                    val id = (o["id"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                    val known = signatures[id]
+                    val signature = if (known != null && known.via == via) known.signature else DUMMY_SIGNATURE
+                    val extra = buildJsonObject {
+                        putJsonObject("google") { put("thought_signature", signature) }
+                    }
+                    JsonObject(base + ("extra_content" to extra))
+                }
+            }
+            JsonObject(m + ("tool_calls" to JsonArray(fixed)))
+        }
+    }
+
+    private fun parse(body: String, via: String): Pair<String?, List<ToolCall>>? = try {
         val msg = json.parseToJsonElement(body).jsonObject["choices"]!!.jsonArray[0]
             .jsonObject["message"]!!.jsonObject
         val content = (msg["content"] as? JsonPrimitive)?.contentOrNull
         val calls = (msg["tool_calls"] as? JsonArray)?.map { tc ->
             val o = tc.jsonObject
             val fn = o["function"]!!.jsonObject
+            val id = (o["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: UUID.randomUUID().toString()
+            // Gemini: remember the thought signature so it can be sent back with the history.
+            val signature = (((o["extra_content"] as? JsonObject)?.get("google") as? JsonObject)
+                ?.get("thought_signature") as? JsonPrimitive)?.contentOrNull
+            if (!signature.isNullOrBlank()) {
+                if (signatures.size > 400) signatures.clear()
+                signatures[id] = Sig(signature, via)
+            }
             ToolCall(
-                id = (o["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
-                    ?: UUID.randomUUID().toString(),
+                id = id,
                 name = fn["name"]!!.jsonPrimitive.content,
                 arguments = (fn["arguments"] as? JsonPrimitive)?.contentOrNull ?: "{}",
             )
