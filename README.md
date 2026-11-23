@@ -23,6 +23,5 @@ Build locally: open in Android Studio (JDK 17), or `gradle assembleDebug` with G
 ## Limits
 
 - Use models that support tool/function calling.
-- Cross-origin iframes, canvas UIs and bot-protected sites are hard for any WebView agent.
 - Only remote MCP servers work.
 - Early version: expect rough edges.
