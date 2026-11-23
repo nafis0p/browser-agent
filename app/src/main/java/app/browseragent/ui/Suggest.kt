@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.browseragent.agent.AgentViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -130,8 +132,17 @@ internal fun suggestionList(vm: AgentViewModel, query: String, active: Boolean):
     return fromHistory + fromEngine
 }
 
+/**
+ * The suggestion rows. Tapping a row opens or searches it (onPick). When onFill is given, every
+ * row also has an arrow that puts the text into the address bar instead, so it can be extended
+ * before searching. The pick action is the last parameter so it can be written as a trailing lambda.
+ */
 @Composable
-internal fun SuggestionRows(items: List<Suggestion>, onPick: (String) -> Unit) {
+internal fun SuggestionRows(
+    items: List<Suggestion>,
+    onFill: ((String) -> Unit)? = null,
+    onPick: (String) -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
         for (s in items) {
@@ -139,12 +150,51 @@ internal fun SuggestionRows(items: List<Suggestion>, onPick: (String) -> Unit) {
                 Modifier
                     .fillMaxWidth()
                     .clickable { onPick(s.value) }
-                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                    .padding(start = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(s.glyph, Modifier.width(30.dp))
-                Text(s.label, maxLines = 1, overflow = TextOverflow.Ellipsis, color = cs.onSurface)
+                Text(
+                    s.label,
+                    Modifier.weight(1f).padding(vertical = 13.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = cs.onSurface,
+                )
+                if (onFill != null) {
+                    Text(
+                        "\u2196",
+                        fontSize = 22.sp,
+                        color = cs.onSurfaceVariant,
+                        modifier = Modifier
+                            .clickable { onFill(s.value) }
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                    )
+                }
             }
         }
+    }
+}
+
+/** The first row while the address bar is edited: the page you are on, with a copy button. */
+@Composable
+internal fun CurrentUrlRow(url: String, onOpen: () -> Unit, onCopy: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { onOpen() }
+            .padding(start = 16.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("\ud83c\udf10", Modifier.width(30.dp))
+        Text(
+            shortUrl(url),
+            Modifier.weight(1f).padding(vertical = 13.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = cs.primary,
+        )
+        TextButton(onClick = onCopy) { Text("Copy") }
     }
 }

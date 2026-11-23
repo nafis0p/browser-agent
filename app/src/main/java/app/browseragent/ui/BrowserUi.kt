@@ -1,6 +1,7 @@
 package app.browseragent.ui
 
 import android.view.View
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -13,7 +14,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -152,20 +156,21 @@ private fun BrowserPage(
     onMenu: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val ctx = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val focus = LocalFocusManager.current
     val aiOn = vm.prefs.agentEnabled
     val home = browser.isHome
     val showWeb = visible && !home && browser.pageError == null
-    // What is typed in the address bar right now (for the suggestion list).
-    var addrEditing by remember { mutableStateOf(false) }
-    var addrText by remember { mutableStateOf("") }
+    // The address bar: whether it is edited, and its text (the suggestions are built from it).
+    val address = remember { AddressState() }
+
+    // Back leaves the address bar before anything else.
+    BackHandler(enabled = address.editing) { focus.clearFocus() }
 
     Column(Modifier.fillMaxSize()) {
         // The only bar: home, address bar, AI, tabs, menu. The start page has its own search box.
-        TopBar(vm, browser, aiOpen && aiOn, onToggleAi, go, onMenu) { editing, text ->
-            addrEditing = editing
-            addrText = text
-        }
+        TopBar(vm, browser, aiOpen && aiOn, onToggleAi, go, onMenu, address)
         ProgressLine(browser)
 
         // The AI works in another tab than the one that is shown.
@@ -213,18 +218,39 @@ private fun BrowserPage(
                 ErrorPage(browser, err)
             }
 
-            // Suggestions: pages from the history and ideas from the search engine.
-            if (addrEditing) {
-                val suggestions = suggestionList(vm, addrText, true)
-                if (suggestions.isNotEmpty()) {
+            // While the address bar is edited: the page you are on (with a copy button), then pages
+            // from the history and ideas from the search engine. The arrow of a row puts its text
+            // into the address bar so it can be extended.
+            if (address.editing) {
+                val typed = address.field.text
+                val pageUrl = if (home) "" else browser.url
+                val showCurrent = pageUrl.isNotBlank() && (typed.isBlank() || typed == pageUrl)
+                val suggestions = suggestionList(vm, if (showCurrent) "" else typed, true)
+                if (showCurrent || suggestions.isNotEmpty()) {
                     Surface(
                         Modifier.fillMaxWidth().align(Alignment.TopStart),
                         tonalElevation = 6.dp,
                         shadowElevation = 6.dp,
                     ) {
-                        SuggestionRows(suggestions) { value ->
-                            browser.load(value)
-                            focus.clearFocus()
+                        Column {
+                            if (showCurrent) {
+                                CurrentUrlRow(
+                                    url = pageUrl,
+                                    onOpen = {
+                                        browser.load(pageUrl)
+                                        focus.clearFocus()
+                                    },
+                                    onCopy = {
+                                        clipboard.setText(AnnotatedString(pageUrl))
+                                        Toast.makeText(ctx, "Link copied", Toast.LENGTH_SHORT).show()
+                                        focus.clearFocus()
+                                    },
+                                )
+                            }
+                            SuggestionRows(suggestions, onFill = { address.fill(it) }) { value ->
+                                browser.load(value)
+                                focus.clearFocus()
+                            }
                         }
                     }
                 }

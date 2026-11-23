@@ -15,6 +15,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
@@ -50,20 +52,35 @@ internal fun ProgressLine(browser: BrowserController) {
 }
 
 /**
- * The rounded address field. The caller decides how wide it is through the modifier.
- * onEdit is told when the field starts or stops being edited and what is typed (for suggestions).
+ * What the address bar is doing: whether the user is editing it and the text in it. The page
+ * shows the suggestions under the bar from this, and a suggestion can put its text into it.
+ */
+class AddressState {
+    var editing by mutableStateOf(false)
+    var field by mutableStateOf(TextFieldValue(""))
+    val focusRequester = FocusRequester()
+
+    /** Puts the text into the bar with the cursor at its end, ready for more words. */
+    fun fill(text: String) {
+        field = TextFieldValue(text, TextRange(text.length))
+        runCatching { focusRequester.requestFocus() }
+    }
+}
+
+/**
+ * The rounded address field. The caller decides how wide it is through the modifier. While it is
+ * edited it shows the whole address (selected, so typing replaces it); otherwise a short form.
  */
 @Composable
 internal fun AddressBar(
     browser: BrowserController,
+    state: AddressState,
     modifier: Modifier = Modifier,
-    onEdit: (Boolean, String) -> Unit = { _, _ -> },
 ) {
     val focus = LocalFocusManager.current
     val cs = MaterialTheme.colorScheme
-    var editing by remember { mutableStateOf(false) }
-    var field by remember { mutableStateOf(TextFieldValue("")) }
-    val shown = if (editing) field else TextFieldValue(if (browser.isHome) "" else shortUrl(browser.url))
+    val editing = state.editing
+    val shown = if (editing) state.field else TextFieldValue(if (browser.isHome) "" else shortUrl(browser.url))
 
     Surface(
         shape = RoundedCornerShape(26.dp),
@@ -71,23 +88,20 @@ internal fun AddressBar(
         modifier = modifier.padding(horizontal = 4.dp, vertical = 6.dp).height(46.dp),
     ) {
         Row(Modifier.padding(start = 12.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (!browser.isHome && browser.url.startsWith("https")) {
+            if (!editing && !browser.isHome && browser.url.startsWith("https")) {
                 Text("\ud83d\udd12", fontSize = 12.sp)
                 Spacer(Modifier.width(6.dp))
             }
             BasicTextField(
                 value = shown,
-                onValueChange = {
-                    field = it
-                    onEdit(true, it.text)
-                },
+                onValueChange = { state.field = it },
                 singleLine = true,
                 textStyle = TextStyle(color = cs.onSurface, fontSize = 16.sp),
                 cursorBrush = SolidColor(cs.primary),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, keyboardType = KeyboardType.Uri),
                 keyboardActions = KeyboardActions(
                     onGo = {
-                        if (field.text.isNotBlank()) browser.load(field.text)
+                        if (state.field.text.isNotBlank()) browser.load(state.field.text)
                         focus.clearFocus()
                     },
                 ),
@@ -99,19 +113,33 @@ internal fun AddressBar(
                         inner()
                     }
                 },
-                modifier = Modifier.weight(1f).onFocusChanged { st ->
-                    if (st.isFocused) {
-                        editing = true
-                        val t = if (browser.isHome) "" else browser.url
-                        field = TextFieldValue(t, TextRange(0, t.length))
-                        onEdit(true, "")
-                    } else {
-                        editing = false
-                        onEdit(false, "")
-                    }
-                },
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(state.focusRequester)
+                    .onFocusChanged { st ->
+                        if (st.isFocused) {
+                            if (!state.editing) {
+                                state.editing = true
+                                val t = if (browser.isHome) "" else browser.url
+                                state.field = TextFieldValue(t, TextRange(0, t.length))
+                            }
+                        } else {
+                            state.editing = false
+                        }
+                    },
             )
-            if (!browser.isHome) {
+            if (editing) {
+                if (state.field.text.isNotEmpty()) {
+                    Text(
+                        "\u2715",
+                        fontSize = 18.sp,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable { state.field = TextFieldValue("") }
+                            .padding(8.dp),
+                    )
+                }
+            } else if (!browser.isHome) {
                 Text(
                     if (browser.isLoading) "\u2715" else "\u27f3",
                     fontSize = 20.sp,
@@ -176,7 +204,9 @@ internal fun MenuRow(label: String, onClick: () -> Unit) {
 
 /**
  * The one bar of the browser, at the top: home, address bar, AI button, tabs, menu.
- * The menu opens the side panel (which also has back, forward and reload).
+ * While the address bar is edited it takes the whole width: a back arrow replaces the home
+ * button and the other buttons are hidden. The menu opens the side panel (which also has back,
+ * forward and reload).
  */
 @Composable
 internal fun TopBar(
@@ -186,22 +216,29 @@ internal fun TopBar(
     onToggleAi: () -> Unit,
     go: (Page) -> Unit,
     onMenu: () -> Unit,
-    onAddress: (Boolean, String) -> Unit,
+    address: AddressState,
 ) {
+    val focus = LocalFocusManager.current
     Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            NavButton("\u2302", !browser.isHome, 38.dp) { browser.showHome() }
+            if (address.editing) {
+                NavButton("\u2190", true, 38.dp) { focus.clearFocus() }
+            } else {
+                NavButton("\u2302", !browser.isHome, 38.dp) { browser.showHome() }
+            }
             if (browser.isHome) {
                 Spacer(Modifier.weight(1f))
             } else {
-                AddressBar(browser, Modifier.weight(1f), onAddress)
+                AddressBar(browser, address, Modifier.weight(1f))
             }
-            if (vm.prefs.agentEnabled) AiButton(aiOpen, vm.running, 42.dp, onToggleAi)
-            TabButton(browser.tabs.size, 38.dp) { go(Page.TABS) }
-            NavButton("\u22ee", true, 38.dp) { onMenu() }
+            if (!address.editing) {
+                if (vm.prefs.agentEnabled) AiButton(aiOpen, vm.running, 42.dp, onToggleAi)
+                TabButton(browser.tabs.size, 38.dp) { go(Page.TABS) }
+                NavButton("\u22ee", true, 38.dp) { onMenu() }
+            }
         }
     }
 }
