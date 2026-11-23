@@ -132,6 +132,8 @@ class BrowserTab internal constructor(
                     val pageUrl = m.optString("url")
                     val pageTitle = m.optString("title")
                     if (pageTitle.isNotEmpty()) title = pageTitle
+                    // The address the page really has now (after redirects).
+                    if (pageUrl.isNotBlank() && pageUrl != "about:blank") url = pageUrl
                     if (m.optInt("status", 0) == 404) {
                         pageError = PageError("notfound", pageUrl)
                     } else {
@@ -237,6 +239,20 @@ class BrowserTab internal constructor(
         )
         s.setNavigationDelegate(
             object : GeckoSession.NavigationDelegate {
+                // The address of the page changed. This also reports redirects and pages that
+                // change their own address, so the address bar shows where the page really is.
+                override fun onLocationChange(
+                    session: GeckoSession,
+                    url: String?,
+                    perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
+                    hasUserGesture: Boolean,
+                ) {
+                    if (!url.isNullOrBlank() && url != "about:blank") {
+                        this@BrowserTab.url = url
+                        owner.tabsChanged()
+                    }
+                }
+
                 override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                     canBack = canGoBack
                 }
@@ -463,17 +479,8 @@ class BrowserTab internal constructor(
         }
         val top = topFrame()
             ?: return "ERROR: the page is not ready (browser bridge not connected yet). Wait a moment and call snapshot again."
-        var data = ask(top, JSONObject().put("op", "snapshot").put("prefix", ""), 8000)
-        if (data == null) {
-            // The page does not answer: its process may be stuck or gone. Start it again once.
-            val restarted = withContext(Dispatchers.Main) { owner.reviveTab(this@BrowserTab) }
-            if (!restarted) return "ERROR: the page did not respond. Try again."
-            settle()
-            val fresh = topFrame()
-                ?: return "ERROR: the page stopped responding and was restarted but is not ready yet. Call snapshot again."
-            data = ask(fresh, JSONObject().put("op", "snapshot").put("prefix", ""), 8000)
-                ?: return "ERROR: the page still does not respond after a restart. Tell the user."
-        }
+        val data = ask(top, JSONObject().put("op", "snapshot").put("prefix", ""), 8000)
+            ?: return "ERROR: the page did not respond. Try again."
 
         val subs = frames.filter { it.ready && !it.isTop }.take(6)
         subFrames = subs
