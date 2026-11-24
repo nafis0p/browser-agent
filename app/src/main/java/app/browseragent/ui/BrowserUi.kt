@@ -130,6 +130,9 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
 
     // An extension is about to be installed: the user decides.
     ExtensionPromptDialog(browser)
+
+    // A file is downloading and the user chooses its name and place.
+    DownloadAskDialog(browser)
 }
 
 @Composable
