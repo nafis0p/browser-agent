@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -19,10 +20,24 @@ class MainActivity : ComponentActivity() {
     private val vm: AgentViewModel by viewModels()
     private lateinit var browser: BrowserController
 
+    // A page asked for the location, camera or microphone and Android needs the user's permission.
+    private var androidPermissionDone: ((Boolean) -> Unit)? = null
+    private val androidPermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { results ->
+        val done = androidPermissionDone
+        androidPermissionDone = null
+        done?.invoke(results.isNotEmpty() && results.values.all { it })
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         browser = BrowserController(this)
         vm.attach(browser)
+        browser.prompts.requestAndroid = { permissions, done ->
+            androidPermissionDone = done
+            androidPermissions.launch(permissions)
+        }
 
         // The tabs of the last run are brought back. Only when there are none, the homepage
         // is opened (or the start page is shown when no homepage is set).

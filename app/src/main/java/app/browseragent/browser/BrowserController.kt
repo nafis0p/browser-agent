@@ -73,6 +73,9 @@ class BrowserController(context: Context) {
 
     val tabs = mutableStateListOf<BrowserTab>()
 
+    /** The questions pages ask: alert, confirm, dropdowns, file pickers, permissions. */
+    val prompts = Prompts(appContext) { s -> tabs.firstOrNull { it.session === s }?.url }
+
     var currentIndex by mutableStateOf(0)
         private set
 
@@ -222,6 +225,12 @@ class BrowserController(context: Context) {
         runCatching { runtime.webExtensionController.setTabActive(tab.session, active) }
     }
 
+    /** Lets the tab show the questions its pages ask (alert, dropdowns, file pickers, permissions). */
+    private fun wire(tab: BrowserTab) {
+        tab.session.setPromptDelegate(prompts.promptDelegate)
+        tab.session.setPermissionDelegate(prompts.permissionDelegate)
+    }
+
     /**
      * Shows the tab in the Firefox view (and wakes it up if it was asleep). The tab that was shown
      * before becomes inactive and the new one active, otherwise Firefox may keep painting the
@@ -234,6 +243,7 @@ class BrowserController(context: Context) {
         shown?.setActive(false)
         tab.lastUsed = now
         tab.ensureOpen(extension)
+        wire(tab)
         if (attached) webView.releaseSession()
         webView.setSession(tab.session)
         tab.setActive(true)
@@ -262,6 +272,7 @@ class BrowserController(context: Context) {
             Toast.makeText(appContext, "The page stopped responding and was reloaded", Toast.LENGTH_SHORT).show()
         } else if (tab.id == agentTabId) {
             tab.ensureOpen(extension)
+            wire(tab)
         }
         return true
     }
@@ -411,6 +422,7 @@ class BrowserController(context: Context) {
         val tab = BrowserTab(nextTabId++, this, runtime)
         tabs.add(tab)
         tab.ensureOpen(extension)
+        wire(tab)
         tab.load(normalize(raw))
         tabsChanged()
         return true
