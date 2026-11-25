@@ -194,7 +194,323 @@
     return res(false, 'unknown op ' + op);
   }
 
+  // ---------------------------------------------------------------- offline copy of the page
+  // The rendered page is copied, its style sheets, images and fonts are loaded (by the background
+  // page of this add-on) and put into the copy as data, scripts are removed. The result is one
+  // HTML file that opens without a connection. It is sent to the app in pieces.
+
+  var MIME_BY_EXT = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+    svg: 'image/svg+xml', ico: 'image/x-icon', avif: 'image/avif', woff2: 'font/woff2', woff: 'font/woff',
+    ttf: 'font/ttf', otf: 'font/otf'
+  };
+
+  function guessType(u) {
+    var m = /\.([a-z0-9]+)(?:[?#]|$)/i.exec(u);
+    return m ? MIME_BY_EXT[m[1].toLowerCase()] : undefined;
+  }
+
+  function fixType(d, u) {
+    if (!d) return d;
+    var t = guessType(u);
+    if (t && /^data:(application\/octet-stream)?;/.test(d.slice(0, 40))) {
+      return 'data:' + t + d.slice(d.indexOf(';'));
+    }
+    return d;
+  }
+
+  async function capturePage() {
+    var base = document.baseURI;
+    var budget = 25 * 1024 * 1024;
+    var count = 0;
+    var skipped = 0;
+    var cache = new Map();
+    var active = 0;
+    var waiting = [];
+
+    function slot() {
+      return new Promise(function (resolve) {
+        if (active < 6) { active++; resolve(); } else { waiting.push(resolve); }
+      });
+    }
+    function release() {
+      active--;
+      var next = waiting.shift();
+      if (next) { active++; next(); }
+    }
+
+    function absolute(u, b) {
+      try { return new URL(u, b || base).href; } catch (e) { return null; }
+    }
+
+    async function fetchRes(url, as, max) {
+      await slot();
+      try {
+        return await browser.runtime.sendMessage({ op: 'fetch', url: url, as: as, max: max });
+      } catch (e) {
+        return null;
+      } finally {
+        release();
+      }
+    }
+
+    function dataUrl(url, max) {
+      if (!url) return Promise.resolve(null);
+      if (url.indexOf('data:') === 0) return Promise.resolve(url);
+      if (!/^https?:/i.test(url)) return Promise.resolve(null);
+      var key = 'd' + url;
+      if (cache.has(key)) return cache.get(key);
+      var p = (async function () {
+        if (budget <= 0 || count > 600) { skipped++; return null; }
+        count++;
+        var r = await fetchRes(url, 'data', max);
+        if (!r || !r.ok) { skipped++; return null; }
+        budget -= r.size || 0;
+        return fixType(r.data, url);
+      })();
+      cache.set(key, p);
+      return p;
+    }
+
+    function textOf(url) {
+      if (!url || !/^https?:/i.test(url)) return Promise.resolve('');
+      var key = 't' + url;
+      if (cache.has(key)) return cache.get(key);
+      var p = (async function () {
+        var r = await fetchRes(url, 'text', 2000000);
+        if (!r || !r.ok) { skipped++; return ''; }
+        return r.text || '';
+      })();
+      cache.set(key, p);
+      return p;
+    }
+
+    // Puts the files that a style sheet uses into it (imported sheets, fonts, background images).
+    async function processCss(css, cssBase, depth) {
+      if (!css) return '';
+      var importRe = /@import\s+(?:url\(\s*)?(['"]?)([^'")\s;]+)\1\s*\)?\s*([^;]*);/gi;
+      var imports = [];
+      var m;
+      while ((m = importRe.exec(css)) !== null) {
+        imports.push({ start: m.index, end: importRe.lastIndex, url: absolute(m[2], cssBase), media: (m[3] || '').trim() });
+      }
+      var out = '';
+      var pos = 0;
+      for (var i = 0; i < imports.length; i++) {
+        var imp = imports[i];
+        out += css.slice(pos, imp.start);
+        pos = imp.end;
+        if (depth < 3 && imp.url) {
+          var t = await textOf(imp.url);
+          if (t) {
+            var inner = await processCss(t, imp.url, depth + 1);
+            out += imp.media ? '@media ' + imp.media + ' {' + inner + '}' : inner;
+          }
+        }
+      }
+      out += css.slice(pos);
+
+      var urlRe = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+      var found = [];
+      while ((m = urlRe.exec(out)) !== null) {
+        found.push({ start: m.index, end: urlRe.lastIndex, raw: m[2].trim() });
+      }
+      var results = await Promise.all(found.map(function (f) {
+        if (f.raw.indexOf('data:') === 0 || f.raw.charAt(0) === '#') return Promise.resolve(null);
+        var a = absolute(f.raw, cssBase);
+        return a ? dataUrl(a, 1500000) : Promise.resolve(null);
+      }));
+      var res2 = '';
+      var p2 = 0;
+      for (var j = 0; j < found.length; j++) {
+        res2 += out.slice(p2, found[j].start);
+        var raw = found[j].raw;
+        if (results[j]) {
+          res2 += 'url("' + results[j] + '")';
+        } else if (raw.indexOf('data:') === 0 || raw.charAt(0) === '#') {
+          res2 += out.slice(found[j].start, found[j].end);
+        } else {
+          var a2 = absolute(raw, cssBase);
+          res2 += 'url("' + (a2 || raw) + '")';
+        }
+        p2 = found[j].end;
+      }
+      res2 += out.slice(p2);
+      return res2;
+    }
+
+    function rulesText(sheet) {
+      try {
+        if (sheet && sheet.cssRules && sheet.cssRules.length) {
+          return Array.prototype.map.call(sheet.cssRules, function (r) { return r.cssText; }).join('\n');
+        }
+      } catch (e) {}
+      return '';
+    }
+
+    // Lists of the original and the copied elements, taken before anything is removed, so that
+    // the n-th element of one is the n-th element of the other.
+    var clone = document.documentElement.cloneNode(true);
+    function all(sel) { return Array.prototype.slice.call(clone.querySelectorAll(sel)); }
+    function origAll(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+    var origStyles = origAll('style');
+    var cloneStyles = all('style');
+    var origLinks = origAll('link[rel~="stylesheet"]');
+    var cloneLinks = all('link[rel~="stylesheet"]');
+    var origImgs = origAll('img');
+    var cloneImgs = all('img');
+    var origCanvas = origAll('canvas');
+    var cloneCanvas = all('canvas');
+
+    // Active content and things that would stop the copy from working offline.
+    all('script, noscript, iframe, frame, object, embed, applet, base, template, audio, picture source').forEach(function (e) { e.remove(); });
+    all('meta[http-equiv]').forEach(function (e) {
+      var h = (e.getAttribute('http-equiv') || '').toLowerCase();
+      if (h === 'refresh' || h === 'content-security-policy') e.remove();
+    });
+    all('link[rel~="preload"], link[rel~="prefetch"], link[rel~="modulepreload"], link[rel~="dns-prefetch"], link[rel~="preconnect"], link[rel~="manifest"]').forEach(function (e) { e.remove(); });
+    all('*').forEach(function (e) {
+      Array.prototype.slice.call(e.attributes).forEach(function (a) {
+        if (a.name.toLowerCase().indexOf('on') === 0) e.removeAttribute(a.name);
+      });
+      if (e.tagName === 'A') {
+        var h = e.getAttribute('href');
+        if (h && /^\s*javascript:/i.test(h)) {
+          e.setAttribute('href', '#');
+        } else if (h && h.charAt(0) !== '#') {
+          var ab = absolute(h);
+          if (ab) e.setAttribute('href', ab);
+        }
+      }
+    });
+
+    var tasks = [];
+
+    cloneStyles.forEach(function (el, i) {
+      tasks.push((async function () {
+        var css = rulesText(origStyles[i]) || el.textContent;
+        el.textContent = await processCss(css, base, 0);
+      })());
+    });
+
+    cloneLinks.forEach(function (el, i) {
+      tasks.push((async function () {
+        var rel = (el.getAttribute('rel') || '').toLowerCase();
+        if (rel.indexOf('alternate') >= 0) { el.remove(); return; }
+        var href = absolute(el.getAttribute('href'));
+        var css = rulesText(origLinks[i]);
+        if (!css && href) css = await textOf(href);
+        if (!css) { el.remove(); return; }
+        var st = document.createElement('style');
+        var media = el.getAttribute('media');
+        if (media) st.setAttribute('media', media);
+        st.textContent = await processCss(css, href || base, 0);
+        if (el.parentNode) el.parentNode.replaceChild(st, el);
+      })());
+    });
+
+    cloneImgs.forEach(function (el, i) {
+      tasks.push((async function () {
+        var o = origImgs[i];
+        var src = (o && (o.currentSrc || o.src)) || el.getAttribute('data-src') ||
+          el.getAttribute('data-lazy-src') || el.getAttribute('data-original') || el.getAttribute('src');
+        el.removeAttribute('srcset');
+        el.removeAttribute('sizes');
+        el.removeAttribute('loading');
+        var a = src ? absolute(src) : null;
+        if (!a) return;
+        var d = await dataUrl(a, 2500000);
+        el.setAttribute('src', d || a);
+      })());
+    });
+
+    cloneCanvas.forEach(function (el, i) {
+      try {
+        var d = origCanvas[i].toDataURL();
+        var img = document.createElement('img');
+        img.setAttribute('src', d);
+        img.setAttribute('style', el.getAttribute('style') || '');
+        if (el.getAttribute('width')) img.setAttribute('width', el.getAttribute('width'));
+        if (el.getAttribute('height')) img.setAttribute('height', el.getAttribute('height'));
+        el.parentNode.replaceChild(img, el);
+      } catch (e) {}
+    });
+
+    all('video').forEach(function (v) {
+      tasks.push((async function () {
+        var poster = v.getAttribute('poster');
+        var a = poster ? absolute(poster) : null;
+        var d = a ? await dataUrl(a, 2500000) : null;
+        if (d && v.parentNode) {
+          var img = document.createElement('img');
+          img.setAttribute('src', d);
+          img.setAttribute('style', 'max-width:100%;height:auto');
+          v.parentNode.replaceChild(img, v);
+        } else {
+          v.remove();
+        }
+      })());
+    });
+
+    all('link[rel~="icon"], link[rel~="shortcut"], link[rel~="apple-touch-icon"]').forEach(function (el) {
+      tasks.push((async function () {
+        var a = absolute(el.getAttribute('href'));
+        var d = a ? await dataUrl(a, 300000) : null;
+        if (d) el.setAttribute('href', d); else el.remove();
+      })());
+    });
+
+    all('[style*="url("]').forEach(function (el) {
+      tasks.push((async function () {
+        el.setAttribute('style', await processCss(el.getAttribute('style'), base, 0));
+      })());
+    });
+
+    await Promise.all(tasks);
+
+    try {
+      var adopted = document.adoptedStyleSheets;
+      if (adopted && adopted.length) {
+        var extra = '';
+        Array.prototype.forEach.call(adopted, function (s) { extra += rulesText(s) + '\n'; });
+        if (extra.trim()) {
+          var st2 = document.createElement('style');
+          st2.textContent = await processCss(extra, base, 0);
+          (clone.querySelector('head') || clone).appendChild(st2);
+        }
+      }
+    } catch (e) {}
+
+    var head = clone.querySelector('head');
+    if (head && !head.querySelector('meta[charset]')) {
+      var mc = document.createElement('meta');
+      mc.setAttribute('charset', 'utf-8');
+      head.insertBefore(mc, head.firstChild);
+    }
+    var doctype = document.doctype ? new XMLSerializer().serializeToString(document.doctype) : '<!DOCTYPE html>';
+    var html = doctype + '\n<!-- Saved from ' + location.href.replace(/--/g, '-') + ' on ' + new Date().toISOString() + ' -->\n' + clone.outerHTML;
+
+    // Sent in pieces, so a big page does not have to travel as one message.
+    var STEP = 400000;
+    var pos2 = 0;
+    while (pos2 < html.length) {
+      var end = Math.min(pos2 + STEP, html.length);
+      var last = html.charCodeAt(end - 1);
+      if (end < html.length && last >= 0xD800 && last <= 0xDBFF) end--;
+      port.postMessage({ type: 'capchunk', part: html.slice(pos2, end) });
+      pos2 = end;
+    }
+    return { ok: true, title: document.title, url: location.href, resources: count, skipped: skipped, length: html.length };
+  }
+
   port.onMessage.addListener(function (msg) {
+    if (msg.op === 'capture') {
+      capturePage().then(
+        function (d) { port.postMessage({ type: 'reply', rid: msg.rid, data: d }); },
+        function (e) { port.postMessage({ type: 'reply', rid: msg.rid, data: { ok: false, msg: String(e && e.message ? e.message : e) } }); }
+      );
+      return;
+    }
     var data;
     try {
       if (msg.op === 'snapshot') {

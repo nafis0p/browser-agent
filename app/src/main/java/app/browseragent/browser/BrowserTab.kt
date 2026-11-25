@@ -27,6 +27,9 @@ import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
+import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStream
 
 internal const val NATIVE_APP = "browser"
 
@@ -101,6 +104,9 @@ class BrowserTab internal constructor(
     // When Firefox last reported that a page could not be loaded.
     private var lastErrorAt = 0L
 
+    // Where the pieces of an offline copy of the page are written while it is being saved.
+    private var captureOut: OutputStream? = null
+
     /** One content-script connection (the top page or an iframe). */
     private class Frame(val port: WebExtension.Port) {
         var ready = false
@@ -127,6 +133,9 @@ class BrowserTab internal constructor(
                 }
                 "reply" -> {
                     replies[m.optInt("rid")]?.complete(m.optJSONObject("data") ?: JSONObject())
+                }
+                "capchunk" -> {
+                    runCatching { captureOut?.write(m.optString("part").toByteArray(Charsets.UTF_8)) }
                 }
                 "page" -> {
                     val pageUrl = m.optString("url")
@@ -456,6 +465,26 @@ class BrowserTab internal constructor(
     /** Removes the highlighted matches. */
     internal fun clearFind() {
         if (opened) session.finder.clear()
+    }
+
+    // ---------------------------------------------------------------- offline copy
+
+    /**
+     * Makes a self-contained copy of the page (style sheets, images and fonts included) and
+     * writes it to the file. Returns the answer of the page script (ok, title, url, resources,
+     * skipped) or null when the page cannot be saved.
+     */
+    suspend fun captureOffline(target: File): JSONObject? {
+        if (isHome || pageError != null) return null
+        val top = topFrame() ?: return null
+        val out = withContext(Dispatchers.IO) { FileOutputStream(target) }
+        captureOut = out
+        try {
+            return ask(top, JSONObject().put("op", "capture"), 150_000)
+        } finally {
+            captureOut = null
+            runCatching { out.close() }
+        }
     }
 
     // ---------------------------------------------------------------- agent API
