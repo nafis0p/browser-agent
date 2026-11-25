@@ -133,6 +133,9 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
 
     // A file is downloading and the user chooses its name and place.
     DownloadAskDialog(browser)
+
+    // Questions from pages: alert, confirm, dropdown lists, file picker, permissions.
+    BrowserPromptHost(browser)
 }
 
 @Composable
