@@ -17,10 +17,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.browseragent.agent.AgentViewModel
+import app.browseragent.browser.Bookmarks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -114,22 +116,32 @@ internal fun rememberSuggestions(vm: AgentViewModel, query: String, active: Bool
     return result
 }
 
-/** Pages from the history that match the text, followed by the search engine's suggestions. */
+/**
+ * Bookmarks that match the text, then pages from the history, then the search engine's
+ * suggestions. Bookmarks and history are searched on the phone only.
+ */
 @Composable
 internal fun suggestionList(vm: AgentViewModel, query: String, active: Boolean): List<Suggestion> {
+    val ctx = LocalContext.current
     val remote = rememberSuggestions(vm, query, active)
     val q = query.trim()
     if (!active || q.length < 2) return emptyList()
+    val fromBookmarks = Bookmarks.get(ctx).items
+        .filter { it.title.contains(q, ignoreCase = true) || it.url.contains(q, ignoreCase = true) }
+        .take(3)
+        .map { Suggestion(it.title.ifBlank { it.url }, it.url, "\u2605") }
+    val marked = fromBookmarks.map { it.value }.toSet()
     val fromHistory = vm.history.entries
         .filter { it.title.contains(q, ignoreCase = true) || it.url.contains(q, ignoreCase = true) }
         .distinctBy { it.url }
+        .filter { it.url !in marked }
         .take(3)
         .map { Suggestion(it.title.ifBlank { it.url }, it.url, "\u21ba") }
     val fromEngine = remote
         .filter { !it.equals(q, ignoreCase = true) }
         .take(6)
         .map { Suggestion(it, it, "\ud83d\udd0d") }
-    return fromHistory + fromEngine
+    return fromBookmarks + fromHistory + fromEngine
 }
 
 /**
