@@ -29,7 +29,7 @@ import app.browseragent.data.AppPrefs
 import java.text.DateFormat
 import java.util.Date
 
-internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS, DOWNLOADS, EXTENSIONS, ADDONS }
+internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS, DOWNLOADS, EXTENSIONS, ADDONS, OFFLINE }
 
 private fun titleOf(p: Page): String = when (p) {
     Page.HISTORY -> "History"
@@ -39,6 +39,7 @@ private fun titleOf(p: Page): String = when (p) {
     Page.DOWNLOADS -> "Downloads"
     Page.EXTENSIONS -> "Manage extensions"
     Page.ADDONS -> "Find extensions"
+    Page.OFFLINE -> "Offline pages"
     Page.BROWSER -> ""
 }
 
@@ -86,6 +87,7 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
                                 }
                                 Page.TABS -> TabsScreen(browser) { page = Page.BROWSER }
                                 Page.DOWNLOADS -> DownloadsScreen(browser)
+                                Page.OFFLINE -> OfflineScreen(browser) { page = Page.BROWSER }
                                 Page.EXTENSIONS -> ExtensionsScreen(
                                     browser,
                                     onGetMore = { page = Page.ADDONS },

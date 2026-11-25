@@ -27,7 +27,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.browseragent.agent.AgentViewModel
 import app.browseragent.browser.BrowserController
+import app.browseragent.browser.OfflinePages
 import app.browseragent.data.Shortcut
+import kotlinx.coroutines.launch
 
 /** One of the four round actions in the top row of the menu. */
 @Composable
@@ -123,6 +125,7 @@ internal fun SideMenu(
 ) {
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
 
     // The list of extensions may have changed (for example one was added from the add-on site).
     LaunchedEffect(open) {
@@ -157,7 +160,7 @@ internal fun SideMenu(
                 tonalElevation = 6.dp,
             ) {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    // Top row: back, forward, save the page offline (later), reload or stop.
+                    // Top row: back, forward, save the page for offline reading, reload or stop.
                     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp)) {
                         TopAction("\u2190", "Back", browser.canGoBack(), Modifier.weight(1f)) {
                             onClose()
@@ -167,7 +170,15 @@ internal fun SideMenu(
                             onClose()
                             browser.forward()
                         }
-                        TopAction("\ud83d\udcbe", "Save", false, Modifier.weight(1f)) {}
+                        TopAction(
+                            "\ud83d\udcbe",
+                            "Save",
+                            !browser.isHome && browser.pageError == null,
+                            Modifier.weight(1f),
+                        ) {
+                            onClose()
+                            scope.launch { savePageOffline(ctx, browser) }
+                        }
                         TopAction(
                             if (browser.isLoading) "\u2715" else "\u27f3",
                             if (browser.isLoading) "Stop" else "Reload",
@@ -201,6 +212,11 @@ internal fun SideMenu(
                     SideRow(if (running > 0) "Downloads (" + running + " running)" else "Downloads") {
                         onClose()
                         go(Page.DOWNLOADS)
+                    }
+                    val saved = OfflinePages.get(ctx).items.size
+                    SideRow(if (saved > 0) "Offline pages (" + saved + ")" else "Offline pages") {
+                        onClose()
+                        go(Page.OFFLINE)
                     }
                     SideRow("Bookmarks", enabled = false, hint = "Soon")
                     HorizontalDivider()
