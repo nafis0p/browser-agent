@@ -26,6 +26,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.browseragent.agent.AgentViewModel
+import app.browseragent.browser.Bookmarks
 import app.browseragent.browser.BrowserController
 import app.browseragent.browser.OfflinePages
 import app.browseragent.data.Shortcut
@@ -204,6 +205,19 @@ internal fun SideMenu(
                     }
                     HorizontalDivider()
 
+                    // Bookmark or un-bookmark the page that is shown, and the list of bookmarks.
+                    val marks = Bookmarks.get(ctx)
+                    val canMark = !browser.isHome && browser.pageError == null
+                    val marked = canMark && marks.isBookmarked(browser.url)
+                    SideRow(if (marked) "\u2605 Remove bookmark" else "\u2606 Bookmark this page", enabled = canMark) {
+                        onClose()
+                        val now = marks.toggle(browser.current.title, browser.url)
+                        Toast.makeText(ctx, if (now) "Bookmarked" else "Bookmark removed", Toast.LENGTH_SHORT).show()
+                    }
+                    SideRow(if (marks.items.isNotEmpty()) "Bookmarks (" + marks.items.size + ")" else "Bookmarks") {
+                        onClose()
+                        go(Page.BOOKMARKS)
+                    }
                     SideRow("History") {
                         onClose()
                         go(Page.HISTORY)
@@ -218,7 +232,6 @@ internal fun SideMenu(
                         onClose()
                         go(Page.OFFLINE)
                     }
-                    SideRow("Bookmarks", enabled = false, hint = "Soon")
                     HorizontalDivider()
 
                     SideRow("Find in page", enabled = !browser.isHome) {

@@ -29,7 +29,7 @@ import app.browseragent.data.AppPrefs
 import java.text.DateFormat
 import java.util.Date
 
-internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS, DOWNLOADS, EXTENSIONS, ADDONS, OFFLINE }
+internal enum class Page { BROWSER, HISTORY, CHATS, SETTINGS, TABS, DOWNLOADS, EXTENSIONS, ADDONS, OFFLINE, BOOKMARKS }
 
 private fun titleOf(p: Page): String = when (p) {
     Page.HISTORY -> "History"
@@ -40,6 +40,7 @@ private fun titleOf(p: Page): String = when (p) {
     Page.EXTENSIONS -> "Manage extensions"
     Page.ADDONS -> "Find extensions"
     Page.OFFLINE -> "Offline pages"
+    Page.BOOKMARKS -> "Bookmarks"
     Page.BROWSER -> ""
 }
 
@@ -88,6 +89,7 @@ fun AppRoot(vm: AgentViewModel, browser: BrowserController, prefs: AppPrefs) {
                                 Page.TABS -> TabsScreen(browser) { page = Page.BROWSER }
                                 Page.DOWNLOADS -> DownloadsScreen(browser)
                                 Page.OFFLINE -> OfflineScreen(browser) { page = Page.BROWSER }
+                                Page.BOOKMARKS -> BookmarksScreen(browser) { page = Page.BROWSER }
                                 Page.EXTENSIONS -> ExtensionsScreen(
                                     browser,
                                     onGetMore = { page = Page.ADDONS },
@@ -226,9 +228,9 @@ private fun BrowserPage(
                 ErrorPage(browser, err)
             }
 
-            // While the address bar is edited: the page you are on (with a copy button), then pages
-            // from the history and ideas from the search engine. The arrow of a row puts its text
-            // into the address bar so it can be extended.
+            // While the address bar is edited: the page you are on (with a copy button), then
+            // bookmarks, pages from the history and ideas from the search engine. The arrow of a
+            // row puts its text into the address bar so it can be extended.
             if (address.editing) {
                 val typed = address.field.text
                 val pageUrl = if (home) "" else browser.url
