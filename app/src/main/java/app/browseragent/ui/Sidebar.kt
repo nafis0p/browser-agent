@@ -31,6 +31,7 @@ import app.browseragent.browser.BrowserController
 import app.browseragent.browser.OfflinePages
 import app.browseragent.data.Shortcut
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /** One of the four round actions in the top row of the menu. */
 @Composable
@@ -127,6 +128,7 @@ internal fun SideMenu(
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
+    var zoomOpen by remember { mutableStateOf(false) }
 
     // The list of extensions may have changed (for example one was added from the add-on site).
     LaunchedEffect(open) {
@@ -264,7 +266,11 @@ internal fun SideMenu(
                         onClose()
                         browser.setDesktop(!browser.desktopMode)
                     }
-                    SideRow("Page zoom", enabled = false, hint = "Soon")
+                    val zoomNow = (browser.current.zoom * 100).roundToInt()
+                    SideRow(if (zoomNow != 100) "Page zoom (" + zoomNow + "%)" else "Page zoom", enabled = !browser.isHome) {
+                        onClose()
+                        zoomOpen = true
+                    }
                     HorizontalDivider()
 
                     if (vm.prefs.agentEnabled) {
@@ -311,5 +317,7 @@ internal fun SideMenu(
                 }
             }
         }
+
+        if (zoomOpen) ZoomDialog(browser) { zoomOpen = false }
     }
 }
