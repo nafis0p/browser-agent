@@ -589,16 +589,36 @@
     setTimeout(sendPage, 1500);
   });
 
-  // ---- Tell the app whether the page is scrolled to the very top. Pull to refresh only works
-  // there, so a normal scroll can never reload the page by accident. Only changes are sent.
+  // ---- Tell the app how the page is scrolled. Only changes are sent.
+  //  - scroll: whether the page is at the very top (pull to refresh only works there).
+  //  - scrolldir: whether the user is scrolling down (the toolbar hides) or up (it comes back).
   if (isTop) {
     var wasAtTop = true;
+    var goingDown = false;
+    var anchorY = 0;
     window.addEventListener('scroll', function () {
       var y = window.scrollY || (document.documentElement && document.documentElement.scrollTop) || 0;
       var atTop = y <= 2;
       if (atTop !== wasAtTop) {
         wasAtTop = atTop;
         port.postMessage({ type: 'scroll', top: atTop });
+      }
+      if (goingDown) {
+        if (y > anchorY) {
+          anchorY = y;
+        } else if (anchorY - y > 16 || atTop) {
+          goingDown = false;
+          anchorY = y;
+          port.postMessage({ type: 'scrolldir', down: false });
+        }
+      } else {
+        if (y < anchorY) {
+          anchorY = y;
+        } else if (y - anchorY > 24 && y > 120) {
+          goingDown = true;
+          anchorY = y;
+          port.postMessage({ type: 'scrolldir', down: true });
+        }
       }
     }, { passive: true });
   }

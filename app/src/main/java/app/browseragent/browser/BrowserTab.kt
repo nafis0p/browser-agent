@@ -81,6 +81,14 @@ class BrowserTab internal constructor(
     var zoom by mutableStateOf(1.0)
         private set
 
+    /** True while the user scrolls down (the toolbar hides) and false when scrolling up. */
+    var scrollingDown by mutableStateOf(false)
+        private set
+
+    /** True while a video or page of this tab is shown full screen. */
+    var fullscreen by mutableStateOf(false)
+        private set
+
     /** How far the page is scrolled down, in pixels (reported by Firefox). */
     @Volatile
     internal var scrollOffset = 0
@@ -160,6 +168,9 @@ class BrowserTab internal constructor(
                 "scroll" -> {
                     domAtTop = m.optBoolean("top", true)
                 }
+                "scrolldir" -> {
+                    scrollingDown = m.optBoolean("down", false)
+                }
                 "user" -> {
                     val label = m.optString("label")
                     val text = when (m.optString("kind")) {
@@ -193,6 +204,11 @@ class BrowserTab internal constructor(
                 // A response Firefox cannot show (a ZIP, an APK, an attachment) is a download.
                 override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
                     owner.startDownload(response.uri, response.headers, response.body)
+                }
+
+                // The page asks to be shown full screen (usually a video), or leaves full screen.
+                override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                    fullscreen = fullScreen
                 }
 
                 // The process of the page crashed, or Android ended it to free memory: without a
@@ -235,6 +251,7 @@ class BrowserTab internal constructor(
                     if (System.currentTimeMillis() - lastErrorAt > 1000) pageError = null
                     scrollOffset = 0
                     domAtTop = true
+                    scrollingDown = false
                     zoom = 1.0
                     lastLoadAt = System.currentTimeMillis()
                     this@BrowserTab.url = url
@@ -351,6 +368,8 @@ class BrowserTab internal constructor(
         pageError = null
         scrollOffset = 0
         domAtTop = true
+        scrollingDown = false
+        fullscreen = false
         zoom = 1.0
         pendingUrl = if (keep.isBlank()) null else keep
     }
@@ -437,6 +456,12 @@ class BrowserTab internal constructor(
 
     fun stop() {
         session.stop()
+    }
+
+    /** Leaves full screen (the back button does this). */
+    fun exitFullscreen() {
+        if (opened) session.exitFullScreen()
+        fullscreen = false
     }
 
     fun setDesktop(enabled: Boolean) {
