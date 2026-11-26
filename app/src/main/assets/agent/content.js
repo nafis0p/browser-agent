@@ -194,6 +194,35 @@
     return res(false, 'unknown op ' + op);
   }
 
+  // ---------------------------------------------------------------- page zoom (per site)
+  // The zoom of a site is kept in the add-on's storage and put on the page when it opens. It is
+  // done with the CSS zoom of the root element, so text and layout both follow it.
+
+  var zoomKey = 'zoom:' + location.hostname;
+  var currentZoom = 1;
+
+  function applyZoom(z) {
+    currentZoom = z;
+    var root = document.documentElement;
+    if (!root) return;
+    if (z && z !== 1) root.style.setProperty('zoom', String(z), 'important');
+    else root.style.removeProperty('zoom');
+  }
+
+  if (isTop && location.hostname) {
+    browser.storage.local.get(zoomKey).then(function (stored) {
+      var z = stored ? stored[zoomKey] : undefined;
+      if (typeof z === 'number' && z > 0) {
+        applyZoom(z);
+        port.postMessage({ type: 'zoom', value: z });
+      }
+    }, function () {});
+    // A page may rewrite the style of the root element; the zoom is put back once it is ready.
+    document.addEventListener('DOMContentLoaded', function () {
+      if (currentZoom !== 1) applyZoom(currentZoom);
+    });
+  }
+
   // ---------------------------------------------------------------- offline copy of the page
   // The rendered page is copied, its style sheets, images and fonts are loaded (by the background
   // page of this add-on) and put into the copy as data, scripts are removed. The result is one
@@ -351,6 +380,8 @@
     // Lists of the original and the copied elements, taken before anything is removed, so that
     // the n-th element of one is the n-th element of the other.
     var clone = document.documentElement.cloneNode(true);
+    // The zoom of the site is not part of the page itself.
+    clone.style.removeProperty('zoom');
     function all(sel) { return Array.prototype.slice.call(clone.querySelectorAll(sel)); }
     function origAll(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
     var origStyles = origAll('style');
@@ -509,6 +540,17 @@
         function (d) { port.postMessage({ type: 'reply', rid: msg.rid, data: d }); },
         function (e) { port.postMessage({ type: 'reply', rid: msg.rid, data: { ok: false, msg: String(e && e.message ? e.message : e) } }); }
       );
+      return;
+    }
+    if (msg.op === 'zoom') {
+      var zv = Number(msg.value);
+      if (zv > 0) {
+        applyZoom(zv);
+        var rec = {};
+        rec[zoomKey] = zv;
+        if (zv === 1) browser.storage.local.remove(zoomKey); else browser.storage.local.set(rec);
+      }
+      port.postMessage({ type: 'reply', rid: msg.rid, data: { ok: true, zoom: currentZoom } });
       return;
     }
     var data;

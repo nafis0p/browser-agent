@@ -77,6 +77,10 @@ class BrowserTab internal constructor(
     var pageError by mutableStateOf<PageError?>(null)
         private set
 
+    /** The zoom of the page in this tab (1.0 is normal). It is remembered per site. */
+    var zoom by mutableStateOf(1.0)
+        private set
+
     /** How far the page is scrolled down, in pixels (reported by Firefox). */
     @Volatile
     internal var scrollOffset = 0
@@ -136,6 +140,9 @@ class BrowserTab internal constructor(
                 }
                 "capchunk" -> {
                     runCatching { captureOut?.write(m.optString("part").toByteArray(Charsets.UTF_8)) }
+                }
+                "zoom" -> {
+                    zoom = m.optDouble("value", 1.0)
                 }
                 "page" -> {
                     val pageUrl = m.optString("url")
@@ -228,6 +235,7 @@ class BrowserTab internal constructor(
                     if (System.currentTimeMillis() - lastErrorAt > 1000) pageError = null
                     scrollOffset = 0
                     domAtTop = true
+                    zoom = 1.0
                     lastLoadAt = System.currentTimeMillis()
                     this@BrowserTab.url = url
                     if (owner.current === this@BrowserTab) owner.noteUser("opened " + url.take(100))
@@ -343,6 +351,7 @@ class BrowserTab internal constructor(
         pageError = null
         scrollOffset = 0
         domAtTop = true
+        zoom = 1.0
         pendingUrl = if (keep.isBlank()) null else keep
     }
 
@@ -445,6 +454,19 @@ class BrowserTab internal constructor(
     fun destroy() {
         handler.removeCallbacksAndMessages(null)
         if (opened) session.close()
+    }
+
+    // ---------------------------------------------------------------- page zoom
+
+    /**
+     * Zooms the page (1.0 is normal, between 0.3 and 3.0). The page script applies it and
+     * remembers it for the whole site.
+     */
+    fun chooseZoom(value: Double) {
+        val v = value.coerceIn(0.3, 3.0)
+        zoom = v
+        val top = frames.firstOrNull { it.ready && it.isTop } ?: return
+        runCatching { top.port.postMessage(JSONObject().put("op", "zoom").put("value", v).put("rid", 0)) }
     }
 
     // ---------------------------------------------------------------- find in page

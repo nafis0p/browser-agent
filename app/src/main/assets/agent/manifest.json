@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "Browser Agent Bridge",
-  "version": "1.1",
-  "description": "Lets the Browser Agent app read pages, perform actions in them and save them for offline reading.",
+  "version": "1.2",
+  "description": "Lets the Browser Agent app read pages, perform actions in them, save them for offline reading and zoom them.",
   "browser_specific_settings": {
     "gecko": {
       "id": "agent@browseragent.app"
@@ -21,5 +21,5 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": ["nativeMessaging", "nativeMessagingFromContent", "geckoViewAddons", "<all_urls>"]
+  "permissions": ["nativeMessaging", "nativeMessagingFromContent", "geckoViewAddons", "storage", "<all_urls>"]
 }
