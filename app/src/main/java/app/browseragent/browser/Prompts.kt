@@ -29,7 +29,9 @@ class PromptAnswer(
 
 /**
  * A question from a page or from the browser engine, in a form the screens can show.
- * The kind is alert, confirm, text, choice, file, beforeunload, permission or media.
+ * The kind is alert, confirm, text, choice, file, color, datetime, repost, beforeunload,
+ * permission or media. For datetime, dtType says which input it is: date, month, week, time or
+ * datetime-local.
  */
 class BrowserPrompt(
     val kind: String,
@@ -39,16 +41,19 @@ class BrowserPrompt(
     val options: List<PromptOption> = emptyList(),
     val multiple: Boolean = false,
     val fileTypes: List<String> = emptyList(),
+    val dtType: String = "",
+    val minValue: String = "",
+    val maxValue: String = "",
     val answer: (PromptAnswer) -> Unit,
 )
 
 private typealias PromptResult = GeckoResult<GeckoSession.PromptDelegate.PromptResponse>
 
 /**
- * The questions that pages ask: JavaScript alert, confirm and prompt, dropdown lists, file
- * pickers, the leave-page question, and the permission to use the location, camera or
- * microphone. Firefox shows none of these by itself; this class turns them into BrowserPrompt
- * objects that the screen shows one after the other.
+ * The questions that pages ask: JavaScript alert, confirm and prompt, dropdown lists, file pickers,
+ * colour and date inputs, the leave-page question, and the permission to use the location,
+ * camera or microphone. Firefox shows none of these by itself; this class turns them into
+ * BrowserPrompt objects that the screen shows one after the other.
  */
 class Prompts(
     private val context: Context,
@@ -191,6 +196,67 @@ class Prompts(
                     }
                     result.complete(response)
                 }
+            }
+            track(bp, prompt)
+            return result
+        }
+
+        // <input type=color>
+        override fun onColorPrompt(
+            session: GeckoSession,
+            prompt: GeckoSession.PromptDelegate.ColorPrompt,
+        ): PromptResult? {
+            val result = PromptResult()
+            val ideas = (prompt.predefinedValues ?: emptyArray()).map { PromptOption(it, it, true, false, 0, false) }
+            val bp = BrowserPrompt(
+                kind = "color",
+                host = host(session),
+                message = "",
+                defaultText = prompt.defaultValue.orEmpty(),
+                options = ideas,
+            ) { a ->
+                runCatching { result.complete(if (a.ok) prompt.confirm(a.text) else prompt.dismiss()) }
+            }
+            track(bp, prompt)
+            return result
+        }
+
+        // <input type=date, time, month, week or datetime-local>
+        override fun onDateTimePrompt(
+            session: GeckoSession,
+            prompt: GeckoSession.PromptDelegate.DateTimePrompt,
+        ): PromptResult? {
+            val result = PromptResult()
+            val kind = when (prompt.type) {
+                GeckoSession.PromptDelegate.DateTimePrompt.Type.DATE -> "date"
+                GeckoSession.PromptDelegate.DateTimePrompt.Type.MONTH -> "month"
+                GeckoSession.PromptDelegate.DateTimePrompt.Type.WEEK -> "week"
+                GeckoSession.PromptDelegate.DateTimePrompt.Type.TIME -> "time"
+                else -> "datetime-local"
+            }
+            val bp = BrowserPrompt(
+                kind = "datetime",
+                host = host(session),
+                message = "",
+                defaultText = prompt.defaultValue.orEmpty(),
+                dtType = kind,
+                minValue = prompt.minValue.orEmpty(),
+                maxValue = prompt.maxValue.orEmpty(),
+            ) { a ->
+                runCatching { result.complete(if (a.ok) prompt.confirm(a.text) else prompt.dismiss()) }
+            }
+            track(bp, prompt)
+            return result
+        }
+
+        // Reloading a page that was the answer to a form: send the form data again?
+        override fun onRepostConfirmPrompt(
+            session: GeckoSession,
+            prompt: GeckoSession.PromptDelegate.RepostConfirmPrompt,
+        ): PromptResult? {
+            val result = PromptResult()
+            val bp = BrowserPrompt(kind = "repost", host = host(session), message = "") { a ->
+                runCatching { result.complete(prompt.confirm(if (a.ok) AllowOrDeny.ALLOW else AllowOrDeny.DENY)) }
             }
             track(bp, prompt)
             return result
