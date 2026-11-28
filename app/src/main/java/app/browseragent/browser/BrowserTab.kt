@@ -44,6 +44,10 @@ private fun JsonObject.str(k: String): String = (this[k] as? JsonPrimitive)?.con
  *
  * A tab that is asleep has no Firefox session running (it was restored from the last run, or
  * it was not used for a while) and keeps only its address. It wakes up when it is shown.
+ *
+ * A private tab (isPrivate) uses a private Firefox session: its cookies, cache and site data
+ * live in memory only and are gone when it closes. It is never added to the browsing history,
+ * never saved for the next start and never put to sleep.
  */
 class BrowserTab internal constructor(
     val id: Int,
@@ -51,9 +55,17 @@ class BrowserTab internal constructor(
     private val runtime: GeckoRuntime,
     restoredUrl: String? = null,
     restoredTitle: String = "",
+    val isPrivate: Boolean = false,
 ) {
+    private fun newSession(): GeckoSession =
+        if (isPrivate) {
+            GeckoSession(GeckoSessionSettings.Builder().usePrivateMode(true).build())
+        } else {
+            GeckoSession()
+        }
+
     /** The Firefox session. A tab that went to sleep gets a fresh one for its next wake-up. */
-    var session = GeckoSession()
+    var session = newSession()
         private set
 
     var url by mutableStateOf("about:blank")
@@ -160,7 +172,8 @@ class BrowserTab internal constructor(
                     if (pageUrl.isNotBlank() && pageUrl != "about:blank") url = pageUrl
                     if (m.optInt("status", 0) == 404) {
                         pageError = PageError("notfound", pageUrl)
-                    } else {
+                    } else if (!isPrivate) {
+                        // What is read in a private tab never goes into the history.
                         owner.recordPage(pageUrl, pageTitle)
                     }
                     owner.tabsChanged()
@@ -180,7 +193,7 @@ class BrowserTab internal constructor(
                         "submit" -> "submitted a form ('" + label + "')"
                         else -> m.optString("kind") + " '" + label + "'"
                     }
-                    if (owner.current === this@BrowserTab) owner.noteUser(text)
+                    if (owner.current === this@BrowserTab && !isPrivate) owner.noteUser(text)
                 }
             }
         }
@@ -255,7 +268,7 @@ class BrowserTab internal constructor(
                     zoom = 1.0
                     lastLoadAt = System.currentTimeMillis()
                     this@BrowserTab.url = url
-                    if (owner.current === this@BrowserTab) owner.noteUser("opened " + url.take(100))
+                    if (owner.current === this@BrowserTab && !isPrivate) owner.noteUser("opened " + url.take(100))
                 }
 
                 override fun onPageStop(session: GeckoSession, success: Boolean) {
@@ -359,7 +372,7 @@ class BrowserTab internal constructor(
         replies.clear()
         opened = false
         loading = false
-        session = GeckoSession()
+        session = newSession()
         wireSession(session)
         canBack = false
         canForward = false
@@ -377,10 +390,10 @@ class BrowserTab internal constructor(
     /**
      * Frees the memory of a tab that is not shown: the Firefox session is closed and the tab keeps
      * only its address and title. It loads the page again when it is shown. Never call this for
-     * the tab that is shown.
+     * the tab that is shown. A private tab never sleeps (its cookies would be lost).
      */
     internal fun sleep() {
-        if (!opened) return
+        if (!opened || isPrivate) return
         // A load that has hung for a long time does not keep the tab awake.
         if (loading && System.currentTimeMillis() - lastLoadAt < 30_000) return
         resetSession()

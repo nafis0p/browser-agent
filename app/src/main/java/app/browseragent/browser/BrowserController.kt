@@ -34,19 +34,26 @@ private const val MAX_AWAKE_TABS = 5
 // Pull to refresh needs a long pull, so a quick scroll can never reload the page by accident.
 private const val REFRESH_PULL_DP = 240
 
+// What the AI is told when it comes near a private tab.
+private const val PRIVATE_NOTE =
+    "ERROR: this is a private tab. The AI does not read pages or act in private tabs. " +
+        "Ask the user to switch to a normal tab.\n"
+
 /** What the user long-pressed on a page: a link, an image, or both (an image inside a link). */
 class ContextInfo(val linkUri: String?, val imageUri: String?, val label: String)
 
 /**
  * Manages the browser tabs. One GeckoView shows the current tab; every tab has its own session.
  * The properties and functions below act on the current tab, so the rest of the app can treat
- * the controller like a single browser. The open tabs are remembered between app starts.
+ * the controller like a single browser. The open tabs are remembered between app starts, except
+ * the private ones.
  *
  * Tabs that are not shown go to sleep after a while (their Firefox session is closed to free
- * memory) and wake up when they are shown.
+ * memory) and wake up when they are shown. Private tabs never sleep.
  *
  * While the AI works it is pinned to one tab (the one that was shown when it started, or the
  * one it opened or switched to itself). If the user leaves that tab, the AI waits for the user.
+ * The AI never reads or acts in a private tab.
  */
 class BrowserController(context: Context) {
     private val appContext: Context = context.applicationContext
@@ -199,6 +206,8 @@ class BrowserController(context: Context) {
                 { ext ->
                     if (ext != null) {
                         extension = ext
+                        // The helper add-on must also run in private tabs (zoom, scrolling, saving).
+                        runCatching { runtime.webExtensionController.setAllowedInPrivateBrowsing(ext, true) }
                         for (t in tabs) {
                             if (t.isOpened()) t.installBridge(ext)
                         }
@@ -291,21 +300,22 @@ class BrowserController(context: Context) {
 
     /**
      * Puts tabs to sleep: first those unused for longer than the set time, then the longest unused
-     * ones when more than a few tabs are awake. The shown tab and the tab of the AI never sleep.
+     * ones when more than a few tabs are awake. The shown tab, the tab of the AI and private tabs
+     * never sleep.
      */
     private fun sweepSleepyTabs() {
         val minutes = sleepAfterMinutes()
         val now = System.currentTimeMillis()
         if (minutes > 0) {
             for (t in tabs) {
-                if (t === shown || t.id == agentTabId || !t.isOpened()) continue
+                if (t === shown || t.isPrivate || t.id == agentTabId || !t.isOpened()) continue
                 if (now - t.lastUsed > minutes * 60_000L) t.sleep()
             }
         }
         var extra = tabs.count { it.isOpened() } - MAX_AWAKE_TABS
         if (extra > 0) {
             val candidates = tabs
-                .filter { it !== shown && it.id != agentTabId && it.isOpened() }
+                .filter { it !== shown && !it.isPrivate && it.id != agentTabId && it.isOpened() }
                 .sortedBy { it.lastUsed }
             for (t in candidates) {
                 if (extra <= 0) break
@@ -318,7 +328,7 @@ class BrowserController(context: Context) {
     /** Puts every tab that is not in use to sleep (used when the phone is low on memory). */
     fun sleepBackgroundTabs() {
         for (t in tabs) {
-            if (t !== shown && t.id != agentTabId) t.sleep()
+            if (t !== shown && !t.isPrivate && t.id != agentTabId) t.sleep()
         }
     }
 
@@ -377,10 +387,16 @@ class BrowserController(context: Context) {
 
     // ---------------------------------------------------------------- remembering tabs
 
-    private fun tabsState(): SavedTabs = SavedTabs(
-        tabs.map { SavedTab(if (it.isHome) "" else it.url, it.title) },
-        currentIndex,
-    )
+    /** Private tabs are not remembered: they are gone when the app is closed. */
+    private fun tabsState(): SavedTabs {
+        val normal = tabs.filter { !it.isPrivate }
+        val cur = tabs.getOrNull(currentIndex)
+        val index = if (cur != null && !cur.isPrivate) normal.indexOf(cur) else normal.size - 1
+        return SavedTabs(
+            normal.map { SavedTab(if (it.isHome) "" else it.url, it.title) },
+            index.coerceAtLeast(0),
+        )
+    }
 
     /** Called by tabs when something worth remembering changed. */
     internal fun tabsChanged() {
@@ -395,7 +411,11 @@ class BrowserController(context: Context) {
     // ---------------------------------------------------------------- tabs
 
     private fun tabLabel(t: BrowserTab): String =
-        t.title.ifBlank { if (t.isHome) "Start page" else t.url }.take(40)
+        if (t.isPrivate) {
+            "private tab"
+        } else {
+            t.title.ifBlank { if (t.isHome) "Start page" else t.url }.take(40)
+        }
 
     /** Shows a tab without telling the AI about it. */
     private fun showTab(index: Int) {
@@ -406,20 +426,23 @@ class BrowserController(context: Context) {
     }
 
     /** Opens a new tab (the start page, or the given address). False when too many tabs are open. */
-    fun newTab(raw: String? = null): Boolean {
+    fun newTab(raw: String? = null, private: Boolean = false): Boolean {
         if (tabs.size >= MAX_TABS) return false
-        val tab = BrowserTab(nextTabId++, this, runtime)
+        val tab = BrowserTab(nextTabId++, this, runtime, null, "", private)
         tabs.add(tab)
         showTab(tabs.size - 1)
         if (raw != null) tab.load(normalize(raw))
-        noteUser("opened a new tab")
+        if (!private) noteUser("opened a new tab")
         return true
     }
 
+    /** Opens a new private tab (the private start page, or the given address). */
+    fun newPrivateTab(raw: String? = null): Boolean = newTab(raw, true)
+
     /** Opens an address in a new tab behind the current one (like a long press on a link). */
-    fun openInBackground(raw: String): Boolean {
+    fun openInBackground(raw: String, private: Boolean = false): Boolean {
         if (tabs.size >= MAX_TABS) return false
-        val tab = BrowserTab(nextTabId++, this, runtime)
+        val tab = BrowserTab(nextTabId++, this, runtime, null, "", private)
         tabs.add(tab)
         tab.ensureOpen(extension)
         wire(tab)
@@ -432,7 +455,9 @@ class BrowserController(context: Context) {
         if (index !in tabs.indices) return
         val changed = index != currentIndex
         showTab(index)
-        if (changed) noteUser("switched to tab " + (index + 1) + " of " + tabs.size + " ('" + tabLabel(tabs[index]) + "')")
+        if (changed && !tabs[index].isPrivate && !current.isPrivate) {
+            noteUser("switched to tab " + (index + 1) + " of " + tabs.size + " ('" + tabLabel(tabs[index]) + "')")
+        }
     }
 
     fun closeTab(index: Int) {
@@ -451,7 +476,7 @@ class BrowserController(context: Context) {
             tabsChanged()
         }
         victim.destroy()
-        noteUser("closed a tab")
+        if (!victim.isPrivate) noteUser("closed a tab")
     }
 
     /** Closes every tab and leaves one fresh tab with the start page. */
@@ -467,6 +492,26 @@ class BrowserController(context: Context) {
         tabsChanged()
         noteUser("closed all tabs")
     }
+
+    /** Closes every private tab. The data of private browsing goes with them. */
+    fun closeAllPrivateTabs() {
+        val priv = tabs.filter { it.isPrivate }
+        if (priv.isEmpty()) return
+        val cur = current
+        findOpen = false
+        for (t in priv) tabs.remove(t)
+        if (tabs.isEmpty()) tabs.add(BrowserTab(nextTabId++, this, runtime))
+        if (cur.isPrivate) {
+            currentIndex = tabs.lastIndex
+            attach(tabs[currentIndex])
+        } else {
+            currentIndex = tabs.indexOf(cur).coerceAtLeast(0)
+        }
+        for (t in priv) t.destroy()
+        tabsChanged()
+    }
+
+    fun privateTabCount(): Int = tabs.count { it.isPrivate }
 
     // ---------------------------------------------------------------- navigation (current tab)
 
@@ -589,12 +634,14 @@ class BrowserController(context: Context) {
         "Tab: t" + t.id + " (" + (tabs.indexOf(t) + 1) + " of " + tabs.size + ")\n"
 
     private suspend fun snapshotOf(t: BrowserTab): String {
+        if (t.isPrivate) return PRIVATE_NOTE
         lastSnapTab = t.id
         return t.snapshot() + footer(t)
     }
 
     suspend fun navigate(raw: String): String = asAgent {
         val t = agentTab()
+        if (t.isPrivate) return@asAgent PRIVATE_NOTE
         withContext(Dispatchers.Main) { t.load(normalize(raw)) }
         t.settle()
         snapshotOf(t)
@@ -602,6 +649,7 @@ class BrowserController(context: Context) {
 
     suspend fun goBack(): String = asAgent {
         val t = agentTab()
+        if (t.isPrivate) return@asAgent PRIVATE_NOTE
         val ok = withContext(Dispatchers.Main) {
             if (t.canBack) {
                 t.goBackNow()
@@ -619,6 +667,7 @@ class BrowserController(context: Context) {
 
     suspend fun act(op: String, id: String, arg: String): String = asAgent {
         val t = agentTab()
+        if (t.isPrivate) return@asAgent PRIVATE_NOTE
         if (lastSnapTab != t.id) {
             return@asAgent "ERROR: the ids you have belong to another tab. Call snapshot first.\n" + footer(t)
         }
@@ -627,15 +676,16 @@ class BrowserController(context: Context) {
         out + footer(t)
     }
 
-    // ---- tab tools for the AI
+    // ---- tab tools for the AI (private tabs are invisible to it)
 
     fun listTabs(): String {
-        val sb = StringBuilder("Open tabs (" + tabs.size + "):\n")
-        for ((i, t) in tabs.withIndex()) {
+        val visible = tabs.filter { !it.isPrivate }
+        val sb = StringBuilder("Open tabs (" + visible.size + "):\n")
+        for (t in visible) {
             val name = t.title.ifBlank { if (t.isHome) "Start page" else t.url }.take(60)
             val where = if (t.isHome) "start page" else t.url.take(80)
             sb.append("[t").append(t.id).append("] ").append(name).append(" - ").append(where)
-            if (i == currentIndex) sb.append("  (shown)")
+            if (t === current) sb.append("  (shown)")
             if (t.id == agentTabId) sb.append("  (your tab)")
             sb.append('\n')
         }
@@ -660,7 +710,7 @@ class BrowserController(context: Context) {
     suspend fun switchTabForAgent(idText: String): String = asAgent {
         val id = parseTabId(idText)
             ?: return@asAgent "ERROR: use a tab id like t3.\n" + listTabs()
-        val i = tabs.indexOfFirst { it.id == id }
+        val i = tabs.indexOfFirst { it.id == id && !it.isPrivate }
         if (i < 0) return@asAgent "ERROR: there is no tab t" + id + ".\n" + listTabs()
         withContext(Dispatchers.Main) { showTab(i) }
         agentTabId = id
@@ -672,7 +722,7 @@ class BrowserController(context: Context) {
     suspend fun closeTabForAgent(idText: String): String = asAgent {
         val id = parseTabId(idText)
             ?: return@asAgent "ERROR: use a tab id like t3.\n" + listTabs()
-        val i = tabs.indexOfFirst { it.id == id }
+        val i = tabs.indexOfFirst { it.id == id && !it.isPrivate }
         if (i < 0) return@asAgent "ERROR: there is no tab t" + id + ".\n" + listTabs()
         withContext(Dispatchers.Main) { closeTab(i) }
         if (agentTabId == id || tabs.none { it.id == agentTabId }) agentTabId = current.id

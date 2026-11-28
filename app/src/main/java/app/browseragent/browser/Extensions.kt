@@ -38,7 +38,7 @@ class PopupInfo(val name: String, val session: GeckoSession)
 /**
  * The add-ons (extensions) of the browser: install from the Mozilla add-on site, turn on and off,
  * remove, and use their toolbar button. Firefox on Android runs them, so ad blockers such as
- * uBlock Origin work.
+ * uBlock Origin work. Add-ons also run in private tabs, so an ad blocker protects those too.
  */
 class Extensions(private val runtime: GeckoRuntime) {
     private val controller: WebExtensionController get() = runtime.webExtensionController
@@ -116,11 +116,11 @@ class Extensions(private val runtime: GeckoRuntime) {
         main.postDelayed({ runCatching { p.session.close() } }, 600)
     }
 
-    /** The user's answer to the installation question. */
+    /** The user's answer to the installation question (an allowed add-on also runs in private tabs). */
     fun answerPrompt(allow: Boolean) {
         val p = prompt ?: return
         prompt = null
-        p.result.complete(WebExtension.PermissionPromptResponse(allow, false, allow))
+        p.result.complete(WebExtension.PermissionPromptResponse(allow, allow, allow))
     }
 
     private fun toItem(e: WebExtension): ExtItem {
@@ -141,7 +141,11 @@ class Extensions(private val runtime: GeckoRuntime) {
         controller.list().accept(
             { list ->
                 val exts = (list ?: emptyList()).filter { !it.isBuiltIn }
-                for (e in exts) e.setActionDelegate(actionDelegate)
+                for (e in exts) {
+                    e.setActionDelegate(actionDelegate)
+                    // The add-ons work in private tabs too (an ad blocker should protect them).
+                    runCatching { controller.setAllowedInPrivateBrowsing(e, true) }
+                }
                 val items = exts.map { toItem(it) }
                 installed.clear()
                 installed.addAll(items)
