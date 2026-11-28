@@ -72,6 +72,8 @@ internal fun ContextMenuDialog(browser: BrowserController) {
     val clipboard = LocalClipboardManager.current
     val link = info.linkUri
     val image = info.imageUri
+    // A link opened from a private tab stays private.
+    val inPrivate = browser.current.isPrivate
 
     fun close() = browser.dismissContextMenu()
 
@@ -90,9 +92,13 @@ internal fun ContextMenuDialog(browser: BrowserController) {
         ctx.startActivity(Intent.createChooser(send, "Share"))
     }
 
-    fun inNewTab(address: String) {
-        val ok = browser.openInBackground(address)
-        Toast.makeText(ctx, if (ok) "Opened in a new tab" else "Tab limit reached", Toast.LENGTH_SHORT).show()
+    fun inNewTab(address: String, private: Boolean) {
+        val ok = browser.openInBackground(address, private)
+        Toast.makeText(
+            ctx,
+            if (!ok) "Tab limit reached" else if (private) "Opened in a private tab" else "Opened in a new tab",
+            Toast.LENGTH_SHORT,
+        ).show()
         close()
     }
 
@@ -111,18 +117,22 @@ internal fun ContextMenuDialog(browser: BrowserController) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (link != null) {
-                    MenuLine("Open in new tab") { inNewTab(link) }
+                    MenuLine(if (inPrivate) "Open in new private tab" else "Open in new tab") { inNewTab(link, inPrivate) }
                     MenuLine("Open in this tab") {
                         close()
                         browser.load(link)
                     }
-                    MenuLine("Open in private tab", enabled = false)
+                    if (!inPrivate) {
+                        MenuLine("Open in private tab") { inNewTab(link, true) }
+                    }
                     MenuLine("Copy link address") { copy(link, "Link") }
                     MenuLine("Share link") { share(link) }
                 }
                 if (link != null && image != null) HorizontalDivider()
                 if (image != null) {
-                    MenuLine("Open image in new tab") { inNewTab(image) }
+                    MenuLine(if (inPrivate) "Open image in new private tab" else "Open image in new tab") {
+                        inNewTab(image, inPrivate)
+                    }
                     MenuLine("View image") {
                         close()
                         browser.load(image)

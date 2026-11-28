@@ -1,6 +1,10 @@
 package app.browseragent.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.view.View
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -13,15 +17,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import app.browseragent.agent.AgentViewModel
 import app.browseragent.agent.Kind
 import app.browseragent.browser.BrowserController
@@ -42,6 +51,16 @@ private fun titleOf(p: Page): String = when (p) {
     Page.OFFLINE -> "Offline pages"
     Page.BOOKMARKS -> "Bookmarks"
     Page.BROWSER -> ""
+}
+
+/** The activity that a context belongs to. */
+private fun Context.findActivity(): Activity? {
+    var c: Context = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
 }
 
 // ==================================================================== root
@@ -167,44 +186,83 @@ private fun BrowserPage(
 ) {
     val cs = MaterialTheme.colorScheme
     val ctx = LocalContext.current
+    val view = LocalView.current
     val clipboard = LocalClipboardManager.current
     val focus = LocalFocusManager.current
     val aiOn = vm.prefs.agentEnabled
+    val tab = browser.current
     val home = browser.isHome
+    val privateTab = tab.isPrivate
+    val fullscreen = tab.fullscreen
     val showWeb = visible && !home && browser.pageError == null
     // The address bar: whether it is edited, and its text (the suggestions are built from it).
     val address = remember { AddressState() }
+    // The toolbar hides while the page is scrolled down and comes back when scrolling up.
+    val hideBar = fullscreen ||
+        (tab.scrollingDown && !address.editing && !browser.findOpen && !home && browser.pageError == null)
 
-    // Back leaves the address bar before anything else.
+    // Back leaves the address bar before anything else, and full screen before that.
     BackHandler(enabled = address.editing) { focus.clearFocus() }
+    BackHandler(enabled = fullscreen) { tab.exitFullscreen() }
+
+    // Full screen video: the bars of the system are hidden.
+    LaunchedEffect(fullscreen) {
+        val window = view.context.findActivity()?.window ?: return@LaunchedEffect
+        val controller = WindowCompat.getInsetsController(window, view)
+        if (fullscreen) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    // A private tab cannot be captured in screenshots and its picture is hidden in the app switcher.
+    LaunchedEffect(privateTab) {
+        val window = view.context.findActivity()?.window ?: return@LaunchedEffect
+        if (privateTab) {
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
-        // The only bar: home, address bar, AI, tabs, menu. The start page has its own search box.
-        TopBar(vm, browser, aiOpen && aiOn, onToggleAi, go, onMenu, address)
-        ProgressLine(browser)
-
-        // The AI works in another tab than the one that is shown.
-        if (vm.running && browser.agentAway) {
-            Surface(
-                color = cs.tertiaryContainer,
-                modifier = Modifier.fillMaxWidth().clickable { browser.showAgentTab() },
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "The AI is working in another tab",
-                        Modifier.weight(1f),
-                        color = cs.onTertiaryContainer,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text("Go there \u25b8", color = cs.onTertiaryContainer, fontWeight = FontWeight.Medium)
+        if (!hideBar) {
+            // The only bar: home, address bar, AI, tabs, menu. A private tab has a dark bar.
+            val barScheme = if (privateTab) darkColorScheme(primary = Color(0xFFB39DFF)) else cs
+            MaterialTheme(colorScheme = barScheme) {
+                Column {
+                    TopBar(vm, browser, aiOpen && aiOn, onToggleAi, go, onMenu, address)
+                    ProgressLine(browser)
                 }
             }
         }
 
-        if (browser.findOpen) FindBar(browser)
+        if (!fullscreen) {
+            // The AI works in another tab than the one that is shown.
+            if (vm.running && browser.agentAway) {
+                Surface(
+                    color = cs.tertiaryContainer,
+                    modifier = Modifier.fillMaxWidth().clickable { browser.showAgentTab() },
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "The AI is working in another tab",
+                            Modifier.weight(1f),
+                            color = cs.onTertiaryContainer,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text("Go there \u25b8", color = cs.onTertiaryContainer, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+
+            if (browser.findOpen) FindBar(browser)
+        }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             // The Firefox view lives inside a pull-to-refresh layout (pull down at the top of a page).
@@ -218,12 +276,16 @@ private fun BrowserPage(
             )
             val err = browser.pageError
             if (home) {
-                StartPage(
-                    vm,
-                    browser,
-                    showAi = aiOn,
-                    onAskAi = { if (aiOn && !aiOpen) onToggleAi() },
-                )
+                if (privateTab) {
+                    PrivateStartPage(vm, browser)
+                } else {
+                    StartPage(
+                        vm,
+                        browser,
+                        showAi = aiOn,
+                        onAskAi = { if (aiOn && !aiOpen) onToggleAi() },
+                    )
+                }
             } else if (err != null) {
                 ErrorPage(browser, err)
             }
@@ -267,8 +329,28 @@ private fun BrowserPage(
             }
         }
 
-        if (aiOpen && aiOn) {
-            AiPanel(vm, Modifier.weight(1f).fillMaxWidth(), onClose = onToggleAi)
+        if (aiOpen && aiOn && !fullscreen) {
+            if (privateTab) {
+                // The AI never reads private tabs; the panel says so instead of opening.
+                Surface(Modifier.weight(1f).fillMaxWidth(), tonalElevation = 2.dp) {
+                    Column(
+                        Modifier.fillMaxSize().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text("The AI does not work in private tabs", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "What it would read goes to your AI provider, which a private tab is meant to avoid. Switch to a normal tab to use it.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        TextButton(onClick = onToggleAi) { Text("Close") }
+                    }
+                }
+            } else {
+                AiPanel(vm, Modifier.weight(1f).fillMaxWidth(), onClose = onToggleAi)
+            }
         }
     }
 }

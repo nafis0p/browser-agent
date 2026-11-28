@@ -113,7 +113,7 @@ private fun SideAccordion(
 
 /**
  * The browser menu: a panel that slides in from the right (about 78 percent of the screen, at most
- * 340 dp wide). Entries that are not built yet are shown greyed out, so the layout is final.
+ * 340 dp wide).
  */
 @Composable
 internal fun SideMenu(
@@ -200,7 +200,19 @@ internal fun SideMenu(
                             Toast.makeText(ctx, "Tab limit reached", Toast.LENGTH_SHORT).show()
                         }
                     }
-                    SideRow("New private tab", enabled = false, hint = "Soon")
+                    SideRow("\ud83d\udd76\ufe0f New private tab") {
+                        onClose()
+                        if (!browser.newPrivateTab()) {
+                            Toast.makeText(ctx, "Tab limit reached", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    val privateCount = browser.privateTabCount()
+                    if (privateCount > 0) {
+                        SideRow("Close private tabs (" + privateCount + ")") {
+                            onClose()
+                            browser.closeAllPrivateTabs()
+                        }
+                    }
                     SideRow("Tabs (" + browser.tabs.size + ")") {
                         onClose()
                         go(Page.TABS)
@@ -240,7 +252,10 @@ internal fun SideMenu(
                         onClose()
                         browser.openFind()
                     }
-                    SideRow("Print", enabled = false, hint = "Soon")
+                    SideRow("Print", enabled = !browser.isHome && browser.pageError == null) {
+                        onClose()
+                        scope.launch { printCurrentPage(ctx, browser) }
+                    }
                     SideRow("Share link", enabled = !browser.isHome) {
                         onClose()
                         val send = Intent(Intent.ACTION_SEND).apply {
